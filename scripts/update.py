@@ -286,15 +286,22 @@ def update_index(idx: dict):
 
 def fetch_mops_revenue(roc_y: int, m: int):
     """公開資訊觀測站：上市公司某月營收彙總（一次一個月、全部公司）"""
-    url = f"https://mops.twse.com.tw/nas/t21/sii/t21sc03_{roc_y}_{m}_0.html"
-    try:
-        time.sleep(2)
-        r = S.get(url, timeout=40)
-        if r.status_code != 200:
-            raise RuntimeError(f"HTTP {r.status_code}")
-        html = r.content.decode("cp950", errors="ignore")
-    except Exception as e:
-        probe["errors"].append(f"mops {roc_y}/{m}: {e}"[:200])
+    html = None
+    for host in ("mopsov.twse.com.tw", "mops.twse.com.tw"):  # 觀測站改版後舊頁面搬到 mopsov
+        for suffix in ("_0.html", ".html"):
+            url = f"https://{host}/nas/t21/sii/t21sc03_{roc_y}_{m}{suffix}"
+            try:
+                time.sleep(2)
+                r = S.get(url, timeout=40)
+                if r.status_code != 200:
+                    raise RuntimeError(f"HTTP {r.status_code}")
+                html = r.content.decode("cp950", errors="ignore")
+                break
+            except Exception as e:
+                probe["errors"].append(f"mops {url}: {e}"[:200])
+        if html:
+            break
+    if not html:
         return None
     out = {}
     for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, flags=re.S | re.I):
@@ -538,8 +545,12 @@ def support_levels(ser):
     lows = [x[4] if len(x) > 4 and x[4] else x[0] for x in ser]
     p = closes[-1]
     out = {}
-    # 波段低點：前後各 5 日內最低，且之後至少 3 天確認
-    swings = [i for i in range(1, n - 3) if lows[i] == min(lows[max(0, i - 5):i + 6])]
+    # 波段低點：前後各 10 日內最低，且之後至少 5 天確認（太短的小波動不算，避免雜訊）
+    swings = [i for i in range(1, n - 5) if lows[i] == min(lows[max(0, i - 10):i + 11])]
+    # 剛形成的低點：近 10 日最低、且已反彈 3% 以上，也算新的前低
+    j = min(range(n - 10, n), key=lambda k: lows[k])
+    if j < n - 1 and (not swings or j > swings[-1]) and p >= lows[j] * 1.03             and lows[j] == min(lows[max(0, j - 10):]):
+        swings.append(j)
     if swings:
         last_sw = lows[swings[-1]]
         out["sup_last"] = last_sw                      # 最近一個波段低點（前波支撐）
