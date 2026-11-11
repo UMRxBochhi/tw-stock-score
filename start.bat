@@ -2,7 +2,7 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 echo [1/3] 取得雲端最新資料...
-git checkout -- data site/data 2>nul
+git checkout -- data 2>nul
 git pull -q
 echo [2/3] 補抓最新資料並計分（第一次需要先 pip install requests）...
 python scripts\update.py

@@ -13,35 +13,48 @@
       <h1>台股評分看板</h1>
       <p class="sub" id="meta">載入中…</p>
     </div>
-    <button id="themeBtn" class="ghost" title="切換深淺色">◐</button>
+    <div class="hright">
+      <span class="seg big" id="strat" title="切換評分策略"><button data-s="short">短線</button><button data-s="long">長線</button></span>
+      <button id="themeBtn" class="ghost" title="切換深淺色">◐</button>
+    </div>
   </header>
 
-  <nav class="tabs">
+  <section class="market" id="market"></section>
+
+  <nav class="tabs" id="tabs">
     <button data-tab="win" class="on">贏勢股</button>
     <button data-tab="value">價值股</button>
-    <button data-tab="all">全部 / 搜尋</button>
-    <button data-tab="how">分數怎麼算</button>
+    <button data-tab="watch">自選股 <span id="watchN"></span></button>
+    <button data-tab="screen">選股器</button>
+    <button data-tab="ind">產業</button>
+    <button data-tab="how">說明</button>
   </nav>
 
   <section class="filters" id="filters">
     <input id="q" type="search" placeholder="代號或名稱，例如 2330、台積">
     <select id="ind"><option value="">全部產業</option></select>
-    <label class="minlbl">總分 ≥ <input id="min" type="number" value="0" min="0" max="100" step="5"></label>
+    <select id="preset"><option value="">快速篩選…</option></select>
+    <button id="advBtn" class="ghost sm">進階篩選 <span id="advN"></span></button>
+    <button id="resetBtn" class="ghost sm">清除條件</button>
     <span class="count" id="count"></span>
   </section>
+  <section class="adv" id="adv" hidden></section>
 
   <main>
     <div id="tableWrap"></div>
-    <div id="how" hidden></div>
+    <div id="page" hidden></div>
   </main>
 
+  <div id="backdrop" hidden></div>
   <aside id="detail" hidden></aside>
+  <div id="tip" hidden></div>
 
   <footer>
-    資料來源：臺灣證券交易所（收盤行情、三大法人、本益比/殖利率、月營收、財報 OpenAPI）。目前僅含上市股票。<br>
+    資料來源：臺灣證券交易所（收盤行情、三大法人、本益比/殖利率、加權指數、月營收、財報）、公開資訊觀測站（月營收歷史）。目前僅含上市股票。<br>
     本頁分數只是把公開數字做排名整理，<b>不是投資建議</b>，也不代表未來會漲。
   </footer>
 </div>
+<script src="charts.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
