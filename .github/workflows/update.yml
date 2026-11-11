@@ -1,0 +1,54 @@
+name: update
+
+on:
+  schedule:
+    - cron: "30 10 * * 1-5"   # 台灣時間週一~五 18:30
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["scripts/**", "site/**", ".github/workflows/**"]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: 抓資料並計分
+        run: python scripts/update.py
+
+      - name: 把資料 commit 回 repo
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A data site
+          git diff --cached --quiet || git commit -m "data: $(TZ=Asia/Taipei date +%F)"
+          git pull --rebase
+          git push
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
