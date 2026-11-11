@@ -288,7 +288,8 @@ def fetch_fundamentals(old):
                 "gm": round(gross / revenue * 100, 2) if gross is not None and revenue else None,
             }
     if inc:
-        fund["income"] = inc
+        # 新一季財報是陸續公布的，還沒公布的公司保留上一季資料
+        fund["income"] = {**fund.get("income", {}), **inc}
     # 資產負債表（算 ROE 用）
     eq = {}
     for suf in ["ci", "basi", "bd", "fh", "ins", "mim"]:
@@ -299,7 +300,7 @@ def fetch_fundamentals(old):
             if code and v:
                 eq[code] = v
     if eq:
-        fund["equity"] = eq
+        fund["equity"] = {**fund.get("equity", {}), **eq}
     fund["updated"] = datetime.now(TW).isoformat()
     return fund
 
@@ -349,7 +350,7 @@ def update_pe_monthly(pe: dict):
         key = f"{y}{m:02d}"
         if key in pe:
             continue
-        for day in (15, 16, 17, 18, 14, 13, 19, 20):
+        for day in (15, 16, 17, 18, 14, 13, 19, 20, 21, 22, 23, 24, 25, 26, 12, 11, 10):
             d = date(y, m, day)
             if d.weekday() >= 5:
                 continue
@@ -509,11 +510,15 @@ def main():
     log("== 本益比/殖利率（最新）")
     if prices:
         last = max(prices)
-        if bw_latest.get("date") != last:
-            d = datetime.strptime(last, "%Y%m%d").date()
-            res, st = fetch_bwibbu(d)
+        # 當天本益比可能還沒公布，往前找最近有資料的交易日
+        for k in sorted(prices, reverse=True)[:4]:
+            if bw_latest.get("date") and bw_latest["date"] >= k:
+                break
+            res, st = fetch_bwibbu(datetime.strptime(k, "%Y%m%d").date())
             if st == "ok":
-                bw_latest = {"date": last, "data": res}
+                bw_latest = {"date": k, "data": res}
+                log(f"  本益比 {k} ok ({len(res)})")
+                break
     log("== 本益比月取樣（位階用）")
     update_pe_monthly(pe_monthly)
     log("== 月營收 / 財報")
