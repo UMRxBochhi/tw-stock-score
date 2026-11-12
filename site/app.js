@@ -51,6 +51,7 @@ const F = {
   yld: { t: "殖利率 %", short: "殖利率", g: (s) => s.m.yld, kind: "num", suf: "%", grp: "價值" },
   pe: { t: "本益比", g: (s) => s.m.pe, kind: "num1", grp: "價值" },
   pe_pos: { t: "本益比位階 %", short: "PE位階", g: (s) => s.m.pe_pos, kind: "num0", suf: "%", grp: "價值" },
+  peg: { t: "PEG（本益比 ÷ 成長率）", short: "PEG", g: (s) => s.m.peg, kind: "num", grp: "價值" },
   pb: { t: "股價淨值比", short: "PB", g: (s) => s.m.pb, kind: "num", grp: "價值" },
   rev_yoy: { t: "月營收年增 %", short: "營收YoY", g: (s) => s.m.rev_yoy, kind: "signed1", grp: "營收" },
   rev3: { t: "近 3 月營收年增 %", short: "近3月YoY", g: (s) => s.m.rev3, kind: "signed1", grp: "營收" },
@@ -66,7 +67,7 @@ const F = {
 };
 const LABEL = { rev_yoy: "月營收年增率", accel: "營收動能", cum_yoy: "累計營收年增率", roe: "ROE（年化）", gm: "毛利率",
   f20: "外資 20 日買超 / 成交量", t20: "投信 20 日買超 / 成交量", i5: "三大法人 5 日買超 / 成交量",
-  r20: "20 日漲跌幅", b60: "股價相對 60 日均線（季線）", pe_cheap: "本益比位階（越低越好）", yld: "殖利率", pb_cheap: "股價淨值比（越低越好）" };
+  r20: "20 日漲跌幅", b60: "股價相對 60 日均線（季線）", pe_cheap: "本益比位階（越低越好）", yld: "殖利率", pb_cheap: "股價淨值比（越低越好）", peg_cheap: "PEG = 本益比 ÷ 近 12 月營收成長率（越低越好）" };
 
 function cell(key, s) {
   const f = F[key], v = f.g(s), suf = f.suf ?? "";
@@ -254,6 +255,8 @@ function renderHow() {
        <b>大量支撐</b>：把近 130 日的成交金額依價位分 24 格（分價量表），成交特別多的價位代表很多人在那裡買，常成為支撐或壓力。<br>
        分數依「離支撐多近」給分：沒跌破且在支撐上方 3% 內 100 分、6% 內 85、10% 內 65、15% 內 45，更遠 30。兩種支撐各算一次取平均。</p>
     <h3>估值分數</h3><table>${list(w.value)}</table>
+    <p class="note">本益比來自證交所，用的是「已正式申報」的近四季 EPS。財報季期間（法說會後到申報期限前），高成長股的本益比會暫時偏高，申報後自動修正。
+       PEG 用來補足這點：成長快的公司即使本益比較高，PEG &lt; 1 仍代表以成長來看不貴。營收成長 &lt; 3% 的公司 PEG 不適用，該項給最低分。</p>
     <p>每一項指標（支撐位置除外）先在「列入評分的股票」裡排名，換成 0~100 的百分位（贏過多少比例的股票），再依權重加總。
        分數是<b>相對排名</b>：70 分代表綜合起來贏過約七成的股票，不是「70% 機率會漲」。</p>
     <p>列入評分：一般上市股票（排除 ETF），且近 20 日平均成交金額 ≥ ${(state.data.min_avg_value / 1e8).toFixed(1)} 億。某項資料缺漏時，用其餘指標重新分配權重。</p>
@@ -382,6 +385,7 @@ async function showDetail(code) {
         <h3>價值</h3>
         <table class="kv">
           ${kv("本益比", fmt(m.pe, 1, " 倍"))}
+          ${kv("PEG（本益比 ÷ 近 12 月營收成長）", m.peg != null ? fmt(m.peg) + (m.peg < 1 ? "　<span class='flag good'>考慮成長不算貴</span>" : "") : (m.pe ? '<span class="na">成長率 &lt; 3%，不適用</span>' : NA), "peg_cheap")}
           ${kv("本益比位階", m.pe_pos != null ? `${m.pe_pos.toFixed(0)}%（5 年 ${m.pe_lo.toFixed(1)}~${m.pe_hi.toFixed(1)} 倍）` : NA)}
           ${kv("殖利率", fmt(m.yld, 2, "%"))}
           ${kv("股價淨值比", fmt(m.pb))}

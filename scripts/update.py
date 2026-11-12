@@ -39,7 +39,7 @@ STRATS = {
     "short": {"chip": 0.30, "sup": 0.30, "tech": 0.25, "fund": 0.15},
     "long": {"value": 0.35, "fund": 0.40, "sup": 0.10, "chip": 0.10, "tech": 0.05},
 }
-VAL_W = {"pe_cheap": 0.70, "yld": 0.30}
+VAL_W = {"pe_cheap": 0.50, "peg_cheap": 0.35, "yld": 0.15}
 # 只用少數核心指標計分，避免雜訊（其他數字仍會顯示在網頁上）
 FUND_W = {"cum_yoy": 0.35, "accel": 0.25, "roe": 0.40}
 CHIP_W = {"f20": 0.50, "t20": 0.50}
@@ -696,6 +696,14 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
             m["pe_cheap"] = -m["pe_pos"]
         if m.get("pb"):
             m["pb_cheap"] = -m["pb"]
+        # PEG = 本益比 ÷ 成長率（近 12 月營收年增，沒有就用累計年增）。考慮成長後才判斷貴不貴
+        g = m.get("rev12") if m.get("rev12") is not None else m.get("cum_yoy")
+        if m.get("pe") and g is not None:
+            if g >= 3:
+                m["peg"] = round(m["pe"] / g, 2)
+                m["peg_cheap"] = -m["peg"]
+            else:
+                m["peg_cheap"] = -999.0  # 沒成長：PEG 無意義，排最後
         m["liquid"] = avg_val >= MIN_AVG_VALUE
         metrics[code] = m
 
