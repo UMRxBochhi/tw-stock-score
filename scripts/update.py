@@ -39,7 +39,9 @@ STRATS = {
     "short": {"chip": 0.30, "sup": 0.30, "tech": 0.25, "fund": 0.15},
     "long": {"value": 0.35, "fund": 0.40, "sup": 0.10, "chip": 0.10, "tech": 0.05},
 }
-VAL_W = {"pe_cheap": 0.50, "peg_cheap": 0.35, "yld": 0.15}
+VAL_W = {"val_cheap": 0.80, "yld": 0.20}
+# 營收與獲利關係不穩定的產業（建案認列、金融），不做預估本益比，用一般本益比位階
+FWD_SKIP_IND = {"建材營造", "金融保險業"}
 # 只用少數核心指標計分，避免雜訊（其他數字仍會顯示在網頁上）
 FUND_W = {"cum_yoy": 0.35, "accel": 0.25, "roe": 0.40}
 CHIP_W = {"f20": 0.50, "t20": 0.50}
@@ -682,10 +684,12 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
         v = bw.get(code)
         if v:
             m["pe"], m["yld"], m["pb"] = v[:3]
+        hist_pe = None
         if m.get("pe"):
             hist = [(pe_monthly[k].get(code) or [None])[0] for k in pe_monthly]
             hist = [h for h in hist if h]
             if len(hist) >= 24:
+                hist_pe = hist
                 m["pe_pos"] = round(sum(1 for h in hist if h < m["pe"]) / len(hist) * 100, 1)
                 m["pe_lo"], m["pe_hi"] = min(hist), max(hist)
                 m["pe_n"] = len(hist)
@@ -696,14 +700,20 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
             m["pe_cheap"] = -m["pe_pos"]
         if m.get("pb"):
             m["pb_cheap"] = -m["pb"]
-        # PEG = 本益比 ÷ 成長率（近 12 月營收年增，沒有就用累計年增）。考慮成長後才判斷貴不貴
-        g = m.get("rev12") if m.get("rev12") is not None else m.get("cum_yoy")
-        if m.get("pe") and g is not None:
-            if g >= 3:
-                m["peg"] = round(m["pe"] / g, 2)
-                m["peg_cheap"] = -m["peg"]
-            else:
-                m["peg_cheap"] = -999.0  # 沒成長：PEG 無意義，排最後
+        # 預估本益比（Forward PE）：近四季 EPS ×（1 + 預估成長率），成長率 = 近 3 月與近 12 月營收年增平均
+        # 假設利潤率不變；沒有法人預估資料，這是用營收動能推估
+        gs = [x for x in (m.get("rev3"), m.get("rev12")) if x is not None]
+        ind = (rev.get(code) or {}).get("ind")
+        if m.get("pe") and m["pe"] > 0 and gs and ind not in FWD_SKIP_IND:
+            g = max(-50.0, min(80.0, sum(gs) / len(gs)))
+            feps = m["p"] / m["pe"] * (1 + g / 100)
+            if feps > 0:
+                m["fg"], m["feps"], m["fpe"] = round(g, 1), round(feps, 2), round(m["p"] / feps, 2)
+                if hist_pe:
+                    m["fpe_pos"] = round(sum(1 for h in hist_pe if h < m["fpe"]) / len(hist_pe) * 100, 1)
+        pos = m.get("fpe_pos", m.get("pe_pos"))
+        if pos is not None:
+            m["val_cheap"] = -pos
         m["liquid"] = avg_val >= MIN_AVG_VALUE
         metrics[code] = m
 
@@ -718,7 +728,13 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
             sc["fund"] = combine(ranks, FUND_W, code)
             sc["chip"] = combine(ranks, CHIP_W, code)
             sc["tech"] = combine(ranks, TECH_W, code)
-            sc["value"] = combine(ranks, VAL_W, code)
+            vparts = []
+            if m.get("val_cheap") is not None:
+                vparts.append((100 + m["val_cheap"], VAL_W["val_cheap"]))
+            if ranks["yld"].get(code) is not None:
+                vparts.append((ranks["yld"][code] * 100, VAL_W["yld"]))
+            vw = sum(w for _, w in vparts)
+            sc["value"] = round(sum(v * w for v, w in vparts) / vw, 1) if vw >= 0.5 else None
             sc["sup"] = m.get("sup_score")
             for name, wts in STRATS.items():
                 parts = [(sc[k], w) for k, w in wts.items() if sc.get(k) is not None]
@@ -813,6 +829,10 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
                 rm.append(last)
                 rp.append(m["p"])
                 re_.append(round(m["p"] / m["pe"], 3))
+            if m.get("feps"):
+                rm.append("F")
+                rp.append(m["p"])
+                re_.append(m["feps"])
             det["river"] = {"m": rm, "p": rp, "e": re_, "q": qs}
         sd = [d for d in sdates if code in scores[d]]
         det["sc"] = {"d": sd, "short": [scores[d][code][0] for d in sd],

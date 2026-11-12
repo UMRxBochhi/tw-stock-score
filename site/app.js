@@ -51,7 +51,8 @@ const F = {
   yld: { t: "殖利率 %", short: "殖利率", g: (s) => s.m.yld, kind: "num", suf: "%", grp: "價值" },
   pe: { t: "本益比", g: (s) => s.m.pe, kind: "num1", grp: "價值" },
   pe_pos: { t: "本益比位階 %", short: "PE位階", g: (s) => s.m.pe_pos, kind: "num0", suf: "%", grp: "價值" },
-  peg: { t: "PEG（本益比 ÷ 成長率）", short: "PEG", g: (s) => s.m.peg, kind: "num", grp: "價值" },
+  fpe: { t: "預估本益比（Forward PE）", short: "預估PE", g: (s) => s.m.fpe, kind: "num1", grp: "價值" },
+  vpos: { t: "河流圖位階 %（有預估用預估）", short: "河流位階", g: (s) => s.m.fpe_pos ?? s.m.pe_pos, kind: "num0", suf: "%", grp: "價值" },
   pb: { t: "股價淨值比", short: "PB", g: (s) => s.m.pb, kind: "num", grp: "價值" },
   rev_yoy: { t: "月營收年增 %", short: "營收YoY", g: (s) => s.m.rev_yoy, kind: "signed1", grp: "營收" },
   rev3: { t: "近 3 月營收年增 %", short: "近3月YoY", g: (s) => s.m.rev3, kind: "signed1", grp: "營收" },
@@ -67,7 +68,7 @@ const F = {
 };
 const LABEL = { rev_yoy: "月營收年增率", accel: "營收動能", cum_yoy: "累計營收年增率", roe: "ROE（年化）", gm: "毛利率",
   f20: "外資 20 日買超 / 成交量", t20: "投信 20 日買超 / 成交量", i5: "三大法人 5 日買超 / 成交量",
-  r20: "20 日漲跌幅", b60: "股價相對 60 日均線（季線）", pe_cheap: "本益比位階（越低越好）", yld: "殖利率", pb_cheap: "股價淨值比（越低越好）", peg_cheap: "PEG = 本益比 ÷ 近 12 月營收成長率（越低越好）" };
+  r20: "20 日漲跌幅", b60: "股價相對 60 日均線（季線）", pe_cheap: "本益比位階（越低越好）", yld: "殖利率", pb_cheap: "股價淨值比（越低越好）", val_cheap: "河流圖位階（預估本益比優先；位階 30% = 70 分）" };
 
 function cell(key, s) {
   const f = F[key], v = f.g(s), suf = f.suf ?? "";
@@ -84,11 +85,11 @@ function cell(key, s) {
 
 const TABCOLS = {
   win: ["p", "chg", "r20", "short", "long", "d5", "value", "sup", "fund", "chip", "tech"],
-  value: ["p", "yld", "pe", "pe_pos", "pb", "sup_dist", "rev_yoy", "accel", "long"],
-  watch: ["p", "chg", "r20", "short", "long", "d5", "pe_pos", "sup_dist", "accel"],
-  screen: ["p", "chg", "short", "long", "d5", "pe_pos", "sup_dist", "vsup_dist", "rev_yoy", "accel", "roe", "f20", "t20"],
+  value: ["p", "yld", "pe", "fpe", "vpos", "sup_dist", "accel", "long"],
+  watch: ["p", "chg", "r20", "short", "long", "d5", "fpe", "vpos", "sup_dist", "accel"],
+  screen: ["p", "chg", "short", "long", "d5", "fpe", "vpos", "sup_dist", "vsup_dist", "accel", "roe", "f20", "t20"],
 };
-const DEFAULT_SORT = { win: ["$strat", false], value: ["yld", false], watch: ["$strat", false], screen: ["$strat", false] };
+const DEFAULT_SORT = { win: ["$strat", false], value: ["long", false], watch: ["$strat", false], screen: ["$strat", false] };
 const HIDE_SM = new Set(["chg", "value", "sup", "fund", "chip", "tech", "pb", "pe", "d5", "roe", "f20", "t20", "rev_yoy", "vsup_dist", "r20"]);
 
 // ---------- 快速篩選
@@ -96,12 +97,12 @@ const PRESETS = {
   grow_trust: { t: "營收成長＋投信買超", f: { rev_yoy: [20, null], accel: [0, null], t20: [1, null] } },
   accel_up: { t: "營收動能轉強", f: { accel: [10, null], streak: [3, null] } },
   accel_down: { t: "營收動能轉弱（留意下修）", f: { accel: [null, -10] } },
-  yield_low: { t: "高殖利率＋低位階", f: { yld: [5, null], pe_pos: [null, 30] } },
+  yield_low: { t: "高殖利率＋河流圖低位階", f: { yld: [5, null], vpos: [null, 30] } },
   strong: { t: "強勢股（趨勢≥80、站上季線）", f: { tech: [80, null], b60: [0, null], short: [60, null] } },
   pullback: { t: "回測支撐不破（離前波支撐 4% 內）", f: { sup_broke: [0, 0], sup_dist: [0, 4] } },
   vsupport: { t: "站在大量支撐上（5% 內）", f: { vsup_dist: [0, 5] } },
   broke: { t: "跌破前波低點（避開）", f: { sup_broke: [1, 1] } },
-  river_cheap: { t: "河流圖便宜區（位階 ≤ 20%）", f: { pe_pos: [null, 20] } },
+  river_cheap: { t: "河流圖便宜區（預估位階 ≤ 20%）", f: { vpos: [null, 20] } },
   long_core: { t: "長線核心（長線≥70、營收動能不轉弱）", f: { long: [70, null], accel: [-5, null] } },
   foreign: { t: "外資大買", f: { f20: [5, null] } },
   quality: { t: "高 ROE＋高毛利", f: { roe: [15, null], gm: [30, null] } },
@@ -113,8 +114,8 @@ function baseList() {
   const all = state.data.stocks;
   switch (state.tab) {
     case "win": return all.filter((s) => s.s[state.strat] != null);
-    case "value": return all.filter((s) => s.m.liquid && s.m.yld >= VALUE_YIELD && s.m.pe > 0 &&
-      (s.m.pe_pos == null || s.m.pe_pos <= VALUE_PEPOS));
+    case "value": return all.filter((s) => s.m.liquid && s.m.pe > 0 && (s.m.fpe_pos ?? s.m.pe_pos) != null &&
+      (s.m.fpe_pos ?? s.m.pe_pos) <= VALUE_PEPOS && (s.m.accel == null || s.m.accel > -10));
     case "watch": return all.filter((s) => state.watch.has(s.c));
     default: return all;
   }
@@ -256,7 +257,9 @@ function renderHow() {
        分數依「離支撐多近」給分：沒跌破且在支撐上方 3% 內 100 分、6% 內 85、10% 內 65、15% 內 45，更遠 30。兩種支撐各算一次取平均。</p>
     <h3>估值分數</h3><table>${list(w.value)}</table>
     <p class="note">本益比來自證交所，用的是「已正式申報」的近四季 EPS。財報季期間（法說會後到申報期限前），高成長股的本益比會暫時偏高，申報後自動修正。
-       PEG 用來補足這點：成長快的公司即使本益比較高，PEG &lt; 1 仍代表以成長來看不貴。營收成長 &lt; 3% 的公司 PEG 不適用，該項給最低分。</p>
+       <b>預估本益比（Forward PE）</b>：沒有免費的法人預估，改用「近四季 EPS ×（1 + 預估成長率）」推估未來 12 個月 EPS，
+       成長率 = 近 3 月與近 12 月營收年增率平均（限制在 −50%~+80%），假設利潤率不變。估值分數用預估本益比在自己 5 年本益比歷史中的位階，直接換算（位階 30% = 70 分）。
+       建材營造、金融保險業的營收與獲利關係不穩定，改用一般本益比位階。</p>
     <p>每一項指標（支撐位置除外）先在「列入評分的股票」裡排名，換成 0~100 的百分位（贏過多少比例的股票），再依權重加總。
        分數是<b>相對排名</b>：70 分代表綜合起來贏過約七成的股票，不是「70% 機率會漲」。</p>
     <p>列入評分：一般上市股票（排除 ETF），且近 20 日平均成交金額 ≥ ${(state.data.min_avg_value / 1e8).toFixed(1)} 億。某項資料缺漏時，用其餘指標重新分配權重。</p>
@@ -271,7 +274,7 @@ function renderHow() {
     <p>每月取樣一次本益比，共 5 年。位階 = 歷史取樣中比現在低的比例。河流圖的各條線 = 歷史本益比的 10/30/50/70/90 百分位 × 當時的近四季 EPS（由收盤價 ÷ 本益比反推）。
        股價在下緣代表以自己的歷史看偏便宜，上緣代表偏貴。</p>
     <h3>價值股清單</h3>
-    <p>殖利率 ≥ ${VALUE_YIELD}%、本益比 &gt; 0、本益比位階 ≤ ${VALUE_PEPOS}%，依殖利率排序。殖利率是用最近一次配息算的，不是預估值。</p>
+    <p>河流圖位階（有預估用預估）≤ ${VALUE_PEPOS}%、本益比 &gt; 0、營收動能沒有轉弱，依長線分數排序。</p>
     <h3>使用小技巧</h3>
     <p>☆ 加入自選股（存在這台裝置的瀏覽器裡）。篩選條件會記住，所有清單共用。網址加上 <code>#2330</code> 可直接打開個股。</p>
     <h3>資料狀態</h3>
@@ -385,7 +388,8 @@ async function showDetail(code) {
         <h3>價值</h3>
         <table class="kv">
           ${kv("本益比", fmt(m.pe, 1, " 倍"))}
-          ${kv("PEG（本益比 ÷ 近 12 月營收成長）", m.peg != null ? fmt(m.peg) + (m.peg < 1 ? "　<span class='flag good'>考慮成長不算貴</span>" : "") : (m.pe ? '<span class="na">成長率 &lt; 3%，不適用</span>' : NA), "peg_cheap")}
+          ${kv("預估本益比（Forward）", m.fpe != null ? `${fmt(m.fpe, 1, " 倍")}<br><span class="note">預估 EPS ${m.feps}（成長 ${m.fg > 0 ? "+" : ""}${m.fg}%）</span>` : '<span class="na">不適用</span>')}
+          ${kv("預估本益比位階", m.fpe_pos != null ? fmt(m.fpe_pos, 0, "%") : NA)}
           ${kv("本益比位階", m.pe_pos != null ? `${m.pe_pos.toFixed(0)}%（5 年 ${m.pe_lo.toFixed(1)}~${m.pe_hi.toFixed(1)} 倍）` : NA)}
           ${kv("殖利率", fmt(m.yld, 2, "%"))}
           ${kv("股價淨值比", fmt(m.pb))}
@@ -429,8 +433,8 @@ function supportHtml(m) {
 }
 
 function riverZone(m) {
-  if (m.pe_pos == null) return null;
-  const p = m.pe_pos;
+  const p = m.fpe_pos ?? m.pe_pos;
+  if (p == null) return null;
   return p <= 10 ? ["good", "河流圖：非常便宜"] : p <= 30 ? ["good", "河流圖：偏便宜"] : p <= 70 ? ["neutral", "河流圖：合理"]
     : p <= 90 ? ["warn", "河流圖：偏貴"] : ["warn", "河流圖：非常貴"];
 }
@@ -438,7 +442,7 @@ function riverZone(m) {
 function signals(s) {
   const m = s.m, out = [];
   const rz = riverZone(m);
-  if (rz) out.push([rz[0], `${rz[1]}（位階 ${m.pe_pos.toFixed(0)}%）`]);
+  if (rz) out.push([rz[0], `${rz[1]}（${m.fpe_pos != null ? "預估" : ""}位階 ${(m.fpe_pos ?? m.pe_pos).toFixed(0)}%）`]);
   if (m.sup_broke) out.push(["warn", `跌破前波低點 ${m.sup_last}`]);
   else if (m.sup_dist != null && m.sup_dist <= 4) out.push(["good", `貼近支撐 ${m.sup}（${m.sup_dist.toFixed(1)}%）`]);
   if (m.vsup_dist != null && m.vsup_dist <= 5) out.push(["good", `站在大量支撐 ${m.vsup} 上`]);
@@ -505,22 +509,22 @@ function drawRiver(det, m) {
   if (!r) { $("#chRiver").innerHTML = '<p class="note">本益比歷史不足 24 個月，或公司虧損沒有本益比，無法畫河流圖。</p>'; return; }
   const n = r.m.length;
   const lines = r.q.map((q) => r.e.map((e) => +(q * e).toFixed(2)));
-  const lbl = r.m.map((k) => `${k.slice(0, 4)}/${k.slice(4, 6)}`);
+  const lbl = r.m.map((k) => k === "F" ? "預估" : `${k.slice(0, 4)}/${k.slice(4, 6)}`);
   Charts.line($("#chRiver"), {
     labels: lbl, height: 260,
-    xlabels: lbl.map((l, i) => (r.m[i].slice(4, 6) === "01" || i === n - 1) ? l.slice(0, 4) : ""),
+    xlabels: lbl.map((l, i) => r.m[i] === "F" ? "預估" : (r.m[i].slice(4, 6) === "01" ? l.slice(0, 4) : "")),
     bands: [0, 1, 2, 3].map((i) => ({ lo: lines[i], hi: lines[i + 1], cls: "b" + (i + 1),
       name: `${r.q[i]}~${r.q[i + 1]} 倍` })),
     series: [
       ...lines.map((l, i) => ({ values: l, cls: "qline", endLabel: `${r.q[i]}倍` })),
       { name: "股價", values: r.p, cls: "s-price" },
     ],
-    tip: (i) => `<b>${lbl[i]}${i === n - 1 ? "（最新）" : ""}</b><br>股價 ${r.p[i]}<br>本益比 ${(r.p[i] / r.e[i]).toFixed(1)} 倍<br>近四季 EPS ≈ ${r.e[i].toFixed(2)}<br>` +
+    tip: (i) => `<b>${r.m[i] === "F" ? "預估（未來 12 個月 EPS）" : lbl[i]}</b><br>股價 ${r.p[i]}<br>${r.m[i] === "F" ? "預估本益比" : "本益比"} ${(r.p[i] / r.e[i]).toFixed(1)} 倍<br>${r.m[i] === "F" ? "預估 EPS" : "近四季 EPS"} ≈ ${r.e[i].toFixed(2)}<br>` +
       r.q.map((q, k) => `${q} 倍 → ${lines[k][i]}`).reverse().join("<br>"),
   });
-  const last = r.p[n - 1], e = r.e[n - 1];
+  const last = r.p[n - 1], e = r.e[n - 1], isF = r.m[n - 1] === "F";
   const zone = last < r.q[0] * e ? "最下緣（歷史 10% 以下）" : last < r.q[1] * e ? "偏低區" : last < r.q[3] * e ? "中間區" : last < r.q[4] * e ? "偏高區" : "最上緣（歷史 90% 以上）";
-  $("#chRiver").insertAdjacentHTML("beforeend", `<p class="note">目前股價落在河流的<b>${zone}</b>。EPS 由「收盤價 ÷ 本益比」反推，為近四季合計。</p>`);
+  $("#chRiver").insertAdjacentHTML("beforeend", `<p class="note">${isF ? "以預估 EPS 計算，" : ""}目前股價落在河流的<b>${zone}</b>。歷史 EPS 由「收盤價 ÷ 本益比」反推（近四季合計）；最右邊「預估」點 = 近四季 EPS ×（1 + 營收成長率），假設利潤率不變。</p>`);
 }
 
 function drawRev(det) {
