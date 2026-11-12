@@ -29,7 +29,8 @@ PRICE_KEEP = 130         # 保留幾個交易日的收盤價（支撐/大量區�
 T86_KEEP = 25            # 保留幾個交易日的法人買賣超
 SCORE_KEEP = 60          # 保留幾天的分數歷史
 REV_MONTHS = 26          # 月營收歷史（算近 12 月年增需要 24 個月）
-PE_MONTHS = 60           # 本益比位階用幾個月的月取樣（5 年）
+PE_MONTHS = 84           # 本益比月取樣保留 7 年（回測需要；位階只用最近 5 年）
+PE_POS_MONTHS = 60
 MAX_RWD_CALLS = int(os.environ.get("MAX_RWD_CALLS", "320"))  # 每次執行最多打幾次 twse.com.tw
 RWD_SLEEP = 3.2          # 證交所網站有頻率限制，每次間隔秒數
 MIN_AVG_VALUE = 3e7      # 流動性門檻：20 日平均成交金額（元）
@@ -686,7 +687,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
             m["pe"], m["yld"], m["pb"] = v[:3]
         hist_pe = None
         if m.get("pe"):
-            hist = [(pe_monthly[k].get(code) or [None])[0] for k in pe_monthly]
+            hist = [(pe_monthly[k].get(code) or [None])[0] for k in sorted(pe_monthly)[-PE_POS_MONTHS:]]
             hist = [h for h in hist if h]
             if len(hist) >= 24:
                 hist_pe = hist
@@ -802,7 +803,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
     sdir = OUT / "s"
     sdir.mkdir(parents=True, exist_ok=True)
     rev_hist = fund.get("rev_hist", {})
-    pmonths = sorted(pe_monthly)
+    pmonths = sorted(pe_monthly)[-PE_POS_MONTHS:]
     for x in stocks:
         code = x["c"]
         ds = [d for d in pdates if code in prices[d]]
@@ -857,6 +858,24 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
     }
 
 
+def sync_hist(prices, t86):
+    """每日新資料也寫進 data/hist（回測用的長期歷史）"""
+    hist = DATA / "hist"
+    if not hist.exists():
+        return
+    for prefix, store in (("px", prices), ("t86", t86)):
+        by_month = {}
+        for d, rows in store.items():
+            by_month.setdefault(d[:6], {})[d] = rows
+        for ym, days in by_month.items():
+            p = hist / f"{prefix}_{ym}.json"
+            cur = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+            new = {d: r for d, r in days.items() if d not in cur and (prefix != "px" or len(next(iter(r.values()))) >= 5)}
+            if new:
+                cur.update(new)
+                p.write_text(json.dumps(cur, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
+
 # ---------------------------------------------------------------- main
 def main():
     prices = load("prices.json", {})
@@ -898,6 +917,7 @@ def main():
         for k in sorted(h)[:-REV_MONTHS]:
             del h[k]
 
+    sync_hist(prices, t86)
     save("prices.json", prices)
     save("names.json", names)
     save("t86.json", t86)
@@ -919,6 +939,9 @@ def main():
     save("probe.json", probe)
     if out:
         save("latest.json", out, OUT)
+        bt = load("backtest.json", None)
+        if bt:
+            save("backtest.json", bt, OUT)
         n = sum(1 for s in out["stocks"] if s["s"].get("long") is not None)
         log(f"輸出完成：{out['date']}，共 {len(out['stocks'])} 檔，有總分 {n} 檔")
     else:

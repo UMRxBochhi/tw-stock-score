@@ -241,6 +241,40 @@ function renderIndustries() {
     </tbody></table></div><p class="note">依目前策略（${STRAT_NAME[k]}）排序。點產業會切到選股器並只顯示該產業。</p>`;
 }
 
+// ---------- 回測
+function btBand(strat, score) {
+  const r = state.bt?.strats?.[strat]?.current?.all?.bands;
+  if (!r || score == null) return null;
+  const k = Object.keys(r).find((b) => { const [lo, hi] = b.split("-").map(Number); return score >= lo && (score < hi || hi === 100); });
+  return k ? { band: k, ...r[k] } : null;
+}
+
+function renderBacktest() {
+  const bt = state.bt;
+  if (!bt) { $("#page").innerHTML = '<div class="how"><p>回測結果還沒產生（需要先補完歷史資料）。</p></div>'; return; }
+  const NAMES = { fund: "基本面", chip: "籌碼面", tech: "趨勢", value: "估值", sup: "支撐位置",
+    cum_yoy: "累計營收年增", accel: "營收動能", f20: "外資 20 日", t20: "投信 20 日", b60: "距季線", sup_score: "支撐分數", val_cheap: "河流圖位階（低）" };
+  const bandTable = (b) => `<table><tr><th>分數區間</th><th>樣本數</th><th>勝率</th><th>平均超額報酬</th></tr>${Object.entries(b).map(([k, v]) =>
+    `<tr><td>${k}</td><td>${v.n.toLocaleString()}</td><td>${bar(v.win)}</td><td>${signed(v.avg)}</td></tr>`).join("")}</table>`;
+  const icTable = (ic) => `<table><tr><th>指標</th><th>全期 IC</th><th>t 值</th><th>訓練期</th><th>驗證期</th></tr>${Object.keys(NAMES).filter((k) => ic.all[k]).map((k) =>
+    `<tr><td>${NAMES[k]}</td><td>${signed(ic.all[k].ic * 100, 1, "")}</td><td>${fmt(ic.all[k].t, 1)}</td><td>${ic.train[k] ? signed(ic.train[k].ic * 100, 1, "") : NA}</td><td>${ic.test[k] ? signed(ic.test[k].ic * 100, 1, "") : NA}</td></tr>`).join("")}</table>`;
+  const sec = (k) => {
+    const s = bt.strats[k]; if (!s) return "";
+    const c = s.current;
+    return `<h3>${STRAT_NAME[k]}分數 → ${s.horizon} 個交易日後</h3>
+      <p>分數前 20% 的股票平均超額報酬 ${signed(c.all.top20_avg)}、後 20% ${signed(c.all.bot20_avg)}；前 20% 跑贏的期數比例 ${fmt(c.all.top20_win, 1, "%")}。綜合 IC ${signed(c.all.ic * 100, 1, "")}。</p>
+      ${bandTable(c.all.bands)}
+      <p class="note">驗證期（${bt.train_until} 之後）綜合 IC：目前權重 ${signed(c.test.ic * 100, 1, "")}，資料校正權重 ${signed(s.calibrated.test.ic * 100, 1, "")}
+        ${s.calibrated_better_on_test ? "（校正版較好）" : "（校正版沒有比較好）"}。</p>
+      <h3>${STRAT_NAME[k]}：各指標預測力（IC ×100，越大越好；|t| &gt; 2 才算可信）</h3>${icTable(bt.ic[k])}`;
+  };
+  $("#page").innerHTML = `<div class="how">
+    <p>回測期間 ${ymdTxt(bt.period[0])} ~ ${ymdTxt(bt.period[1])}，每週一次、共 ${bt.n_dates} 個時間點，只用當時已公布的資料計分。
+       <b>勝率</b> = 超額報酬 &gt; 0 的比例；<b>超額報酬</b> = 個股報酬 − 同期所有評分股票平均。</p>
+    ${sec("short")}${sec("long")}
+    <p class="note">${bt.notes.join("；")}。回測反映的是過去，市場環境改變時不保證有效。</p></div>`;
+}
+
 function renderHow() {
   const w = state.data.weights;
   const pct = (x) => Math.round(x * 100) + "%";
@@ -291,6 +325,7 @@ function render() {
   $("#page").hidden = isList;
   if (isList) renderTable();
   else if (t === "ind") renderIndustries();
+  else if (t === "bt") renderBacktest();
   else renderHow();
   $("#watchN").textContent = state.watch.size ? `(${state.watch.size})` : "";
 }
@@ -347,6 +382,7 @@ async function showDetail(code) {
       <div class="pricebox"><div class="val">${fmt(m.p)}</div><div>${signed(m.chg)} 今日</div><div>${signed(m.r20, 1)} 20 日</div></div>
     </div>
     <div class="chips">${chips}</div>
+    ${["short", "long"].map((k) => { const b = btBand(k, s.s[k]); return b ? `<p class="note">${STRAT_NAME[k]} ${b.band} 分的股票，回測中 ${bt_h(k)} 日後勝率 <b>${b.win}%</b>、平均超額 ${signed(b.avg)}（樣本 ${b.n.toLocaleString()}）</p>` : ""; }).join("")}
 
     <h3>股價與支撐（近 ${"130"} 個交易日）</h3><div id="chPrice" class="chartbox"></div>
     <div class="supbox">${supportHtml(m)}</div>
@@ -438,6 +474,8 @@ function riverZone(m) {
   return p <= 10 ? ["good", "河流圖：非常便宜"] : p <= 30 ? ["good", "河流圖：偏便宜"] : p <= 70 ? ["neutral", "河流圖：合理"]
     : p <= 90 ? ["warn", "河流圖：偏貴"] : ["warn", "河流圖：非常貴"];
 }
+
+const bt_h = (k) => state.bt?.strats?.[k]?.horizon ?? "";
 
 function signals(s) {
   const m = s.m, out = [];
@@ -621,6 +659,7 @@ fetch("data/latest.json", { cache: "no-cache" })
     $("#ind").insertAdjacentHTML("beforeend", inds.map((i) => `<option>${esc(i)}</option>`).join(""));
     $("#preset").insertAdjacentHTML("beforeend", Object.entries(PRESETS).map(([k, p]) => `<option value="${k}">${p.t}</option>`).join(""));
     $$("#strat button").forEach((b) => b.classList.toggle("on", b.dataset.s === state.strat));
+    fetch("data/backtest.json", { cache: "no-cache" }).then((r) => r.ok ? r.json() : null).then((b) => { state.bt = b; }).catch(() => {});
     renderMarket();
     renderAdv();
     setTab("win");
