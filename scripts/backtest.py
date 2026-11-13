@@ -324,6 +324,7 @@ def main():
                             "avg_ret": round(sum(bret) / len(bret) * 100, 2)}
         report["rules"][rid] = out
     u.save("backtest.json", report)
+    u.log(json.dumps(report["strats"], ensure_ascii=False)[:3000])
     save_pool(records)
 
 
@@ -357,7 +358,6 @@ def save_pool(records):
                 periods.append(bins)
         pool[name] = periods
     u.save("pool.json", pool)
-    u.log(json.dumps(report["strats"], ensure_ascii=False)[:3000])
 
 
 if __name__ == "__main__":
