@@ -219,3 +219,14 @@ footer { margin-top: 24px; color: var(--text-muted); font-size: 12px; line-heigh
 .rulebox .market { margin-top: 8px; }
 .sop { margin: 4px 0 0; padding-left: 22px; line-height: 1.8; }
 .rulebox .kv td:not(:first-child) { text-align: right; }
+.rulebox details { margin-top: 8px; border-top: 1px solid var(--grid); padding-top: 6px; }
+.rulebox summary { cursor: pointer; color: var(--text-secondary); font-weight: 600; padding: 4px 0; }
+.rulebox summary:hover { color: var(--text-primary); }
+#estBox { margin-top: 10px; }
+#estBox .note { margin: 2px 0; font-size: 13px; color: var(--text-secondary); }
+@media (max-width: 700px) {
+  .market { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .card .val { font-size: 20px; }
+  .rulebox { padding: 12px; }
+  .tabs button { padding: 8px 10px; font-size: 14px; }
+}

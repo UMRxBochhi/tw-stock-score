@@ -80,7 +80,8 @@ def build_records():
         revh.setdefault(code, {}).update(h)
     pe_m = u.load("pe_monthly.json", {})
     pe_keys = sorted(pe_m)
-    rev_ind = {c: r.get("ind") for c, r in u.load("fundamentals.json", {}).get("revenue", {}).items()}
+    _rev = u.load("fundamentals.json", {}).get("revenue", {})
+    rev_ind = {c: u.industry(c, _rev) for c in {c for d in px for c in px[d]}}
 
     dates = sorted(px)
     N = len(dates)
@@ -191,11 +192,12 @@ def main():
     report = {"period": [records[0][0], records[-1][0]] if records else None, "n_dates": len(records),
               "train_until": records[n_train - 1][0] if n_train else None,
               "notes": ["ROE、殖利率沒有歷史資料，回測中不計入", "本益比位階用月取樣依股價換算，屬近似",
-                        "超額報酬 = 個股報酬 − 同期所有評分股票的中位數（隨機挑股勝率約 50%）"],
+                        "超額報酬 = 個股報酬 − 同期所有評分股票的中位數（隨機挑股勝率約 50%）",
+                        "精選 N 檔：符合條件的股票中，外資 20 日買超比例最高的 N 檔"],
               "strats": {}, "ic": {}}
 
     comps = ["fund", "liq", "chip", "tech", "value", "sup"]
-    raw = ["streak", "rev3", "cum_yoy", "accel", "f20", "t20", "b60", "vr", "lv", "sup_score", "val_cheap"]
+    raw = ["streak", "rev3", "cum_yoy", "accel", "f20", "t20", "b20", "b60", "vr", "lv", "sup_score", "val_cheap"]
 
     def ic_table(name, recs):
         out = {}

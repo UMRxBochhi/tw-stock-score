@@ -50,8 +50,9 @@ RULES = {
 # 精選：符合規則的股票中，外資 20 日買超比例最高的前 N 檔（回測中排序方式以訓練期表現選出）
 
 
+# （試過「同產業最多 2 檔」：回測沒有比較好，訓練期最差一期反而從 −24% 變 −32%，所以不限制）
 def top_picks(cands: list, rid: str):
-    """cands: [(code, m), ...] → 精選代號"""
+    """cands: [(code, m), ...] → 精選代號：外資 20 日買超比例高的優先"""
     c = [(code, m) for code, m in cands if rid in (m.get("rules") or [])]
     c.sort(key=lambda x: -(x[1].get("f20") if x[1].get("f20") is not None else -999))
     return [code for code, _ in c[:RULES[rid]["n"]]]
@@ -63,6 +64,7 @@ def is_over(m: dict) -> bool:
     return (m.get("b20") or 0) > OVER_B20 or (m.get("b60") or 0) > OVER_B60
 
 
+SCORE_VER = 3          # 評分公式版本（改公式就 +1，分數歷史會重新累積）
 RULE_MIN_VALUE = 1e9   # 20 日均成交金額 10 億
 
 
@@ -88,6 +90,14 @@ def strat_score(sc: dict, m: dict, wts: dict):
 VAL_W = {"val_cheap": 0.80, "yld": 0.20}
 # 營收與獲利關係不穩定的產業（建案認列、金融），不做預估本益比，用一般本益比位階
 FWD_SKIP_IND = {"建材營造", "金融保險業"}
+
+
+def industry(code: str, rev: dict):
+    """產業別來自月營收資料；金控、保險不在一般月營收表裡 → 依代號補（28xx、5880 = 金融保險業）"""
+    ind = (rev.get(code) or {}).get("ind")
+    if not ind and (code.startswith("28") or code == "5880"):
+        ind = "金融保險業"
+    return ind
 # 只用少數核心指標計分，避免雜訊（其他數字仍會顯示在網頁上）
 FUND_W = {"streak": 0.35, "rev3": 0.25, "accel": 0.20, "cum_yoy": 0.20}
 CHIP_W = {"f20": 1.0}
@@ -762,7 +772,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
         # 預估本益比（Forward PE）：近四季 EPS ×（1 + 預估成長率），成長率 = 近 3 月與近 12 月營收年增平均
         # 假設利潤率不變；沒有法人預估資料，這是用營收動能推估
         gs = [x for x in (m.get("rev3"), m.get("rev12")) if x is not None]
-        ind = (rev.get(code) or {}).get("ind")
+        ind = industry(code, rev)
         if m.get("pe") and m["pe"] > 0 and gs and ind not in FWD_SKIP_IND:
             g = max(-50.0, min(80.0, sum(gs) / len(gs)))
             feps = m["p"] / m["pe"] * (1 + g / 100)
@@ -833,20 +843,21 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
             for name, wts in STRATS.items():
                 sc[name] = strat_score(sc, m, wts)
             m["pct"] = {k: round(ranks[k][code] * 100) for k in keys if code in ranks[k]}
-        stocks.append({"c": code, "n": names.get(code, ""), "ind": (rev.get(code) or {}).get("ind"),
+        stocks.append({"c": code, "n": names.get(code, ""), "ind": industry(code, rev),
                        "s": sc, "m": m})
     stocks.sort(key=lambda x: (x["s"].get("long") is None, -(x["s"].get("long") or 0)))
 
     # 分數歷史 → 5 日分數變化（{日期: {代號: [短線, 長線]}}）
-    for k in list(scores):
-        if any(not isinstance(v, list) for v in scores[k].values()):
-            del scores[k]
+    # 評分公式改版時，舊分數不能拿來比（5 日變化會失真）→ 清掉重新累積
+    if scores.get("_v") != SCORE_VER:
+        scores.clear()
+        scores["_v"] = SCORE_VER
     scores[last] = {x["c"]: [x["s"].get("short"), x["s"].get("long")] for x in stocks
                     if x["s"].get("short") is not None or x["s"].get("long") is not None}
-    for k in sorted(scores)[:-SCORE_KEEP]:
+    for k in sorted(k for k in scores if k.isdigit())[:-SCORE_KEEP]:
         del scores[k]
-    sdates = sorted(scores)
-    ref = scores[sdates[-6]] if len(sdates) >= 6 else (scores[sdates[0]] if len(sdates) > 1 else {})
+    sdates = sorted(k for k in scores if k.isdigit())
+    ref = scores[sdates[-6]] if len(sdates) >= 6 else {}
     for x in stocks:
         old = ref.get(x["c"])
         if not old:
