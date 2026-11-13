@@ -35,17 +35,38 @@ MAX_RWD_CALLS = int(os.environ.get("MAX_RWD_CALLS", "320"))  # 每次執行最�
 RWD_SLEEP = 3.2          # 證交所網站有頻率限制，每次間隔秒數
 MIN_AVG_VALUE = 3e7      # 流動性門檻：20 日平均成交金額（元）
 
-# 兩種策略：同樣的五個面向，權重不同
+# 兩種策略（依 2024/10~2026/10 回測結果設計，見 scripts/backtest.py）
+# 回測中有穩定預測力的只有：營收成長（連續年增、近3月、動能、累計）、流動性（成交金額規模）、外資買超
+# 估值、支撐、趨勢在回測中沒有預測力 → 不計分，只當參考資訊顯示
 STRATS = {
-    "short": {"chip": 0.30, "sup": 0.30, "tech": 0.25, "fund": 0.15},
-    "long": {"value": 0.35, "fund": 0.40, "sup": 0.10, "chip": 0.10, "tech": 0.05},
+    "short": {"fund": 0.50, "liq": 0.30, "chip": 0.20},
+    "long": {"fund": 0.50, "liq": 0.35, "chip": 0.15},
 }
+# 策略選股規則（回測驗證期勝率見網頁「策略選股」）
+RULES = {
+    "long_core": {"h": "long", "t": "長線核心：營收連續年增 ≥ 12 個月＋成交金額前 30%＋近 3 月營收成長前 50%"},
+    "short_core": {"h": "short", "t": "短線：營收連續年增 ≥ 12 個月＋營收動能 > 0＋成交金額前 30%"},
+}
+
+
+def rule_hits(m: dict, liq_pct, rev3_pct):
+    """liq_pct、rev3_pct：0~1 的百分位（在評分股票中）"""
+    hits = []
+    streak = m.get("streak") or 0
+    if streak >= 12 and liq_pct is not None and liq_pct >= 0.7:
+        if rev3_pct is not None and rev3_pct >= 0.5:
+            hits.append("long_core")
+        if (m.get("accel") or -1) > 0:
+            hits.append("short_core")
+    return hits
+
+
 VAL_W = {"val_cheap": 0.80, "yld": 0.20}
 # 營收與獲利關係不穩定的產業（建案認列、金融），不做預估本益比，用一般本益比位階
 FWD_SKIP_IND = {"建材營造", "金融保險業"}
 # 只用少數核心指標計分，避免雜訊（其他數字仍會顯示在網頁上）
-FUND_W = {"cum_yoy": 0.35, "accel": 0.25, "roe": 0.40}
-CHIP_W = {"f20": 0.50, "t20": 0.50}
+FUND_W = {"streak": 0.35, "rev3": 0.25, "accel": 0.20, "cum_yoy": 0.20}
+CHIP_W = {"f20": 1.0}
 TECH_W = {"b60": 1.0}
 
 S = requests.Session()
@@ -526,6 +547,16 @@ def update_pe_monthly(pe: dict):
             del pe[k]
 
 
+def after_split(ser):
+    """台股單日漲跌幅限制 10%，單日變動超過 ±15% 視為分割/減資等事件，只保留事件之後的資料"""
+    cut = 0
+    for i in range(1, len(ser)):
+        a, b = ser[i - 1][0], ser[i][0]
+        if a and b and not (0.85 <= b / a <= 1.15):
+            cut = i
+    return ser[cut:]
+
+
 # ---------------------------------------------------------------- 支撐 / 大量區
 def dist_score(d):
     """股價高於支撐 d%：越貼近支撐（但沒跌破）分數越高"""
@@ -644,7 +675,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
         close = row[0]
         if not is_stock(code):
             continue
-        ser = [prices[d][code] for d in pdates if code in prices[d]]
+        ser = after_split([prices[d][code] for d in pdates if code in prices[d]])
         closes = [x[0] for x in ser]
         m = {"p": close}
         last20 = ser[-20:]
@@ -718,8 +749,41 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
         m["liquid"] = avg_val >= MIN_AVG_VALUE
         metrics[code] = m
 
+    # ETF：沒有營收/本益比，不評分，只整理價格、量能與法人
+    etfs = []
+    for code, row in prices[last].items():
+        if not re.fullmatch(r"00\d{2,4}[A-Z]?", code):
+            continue
+        ser = [prices[d][code] for d in pdates if code in prices[d]]
+        closes = [x[0] for x in ser]
+        if len(closes) < 2:
+            continue
+        e = {"c": code, "n": names.get(code, ""), "p": closes[-1],
+             "chg": round((closes[-1] / closes[-2] - 1) * 100, 2),
+             "avgval": round(sum(x[2] for x in ser[-20:]) / len(ser[-20:]))}
+        if len(closes) >= 21:
+            e["r20"] = round((closes[-1] / closes[-21] - 1) * 100, 2)
+        if len(closes) >= 61:
+            e["r60"] = round((closes[-1] / closes[-61] - 1) * 100, 2)
+        if len(closes) >= 121:
+            e["r120"] = round((closes[-1] / closes[-121] - 1) * 100, 2)
+        if len(closes) >= 40:
+            n60 = closes[-60:]
+            e["b60"] = round((closes[-1] / (sum(n60) / len(n60)) - 1) * 100, 2)
+        vol = sum(prices[d][code][1] for d in tdates[-20:] if code in prices.get(d, {}))
+        if vol:
+            e["inst20"] = round(sum(sum(t86[d].get(code, [0, 0, 0])) for d in tdates[-20:]) / vol * 100, 2)
+        v = bw.get(code)
+        if v and v[1]:
+            e["yld"] = v[1]
+        nm = e["n"]
+        e["kind"] = ("債券" if "債" in nm else "槓桿/反向" if any(x in nm for x in ("正2", "反1", "反向", "槓桿"))
+                     else "高股息" if any(x in nm for x in ("高息", "高股息", "股息", "收益")) else "股票型")
+        etfs.append(e)
+    etfs.sort(key=lambda e: -e["avgval"])
+
     uni = {c: m for c, m in metrics.items() if m["liquid"]}
-    keys = set(FUND_W) | set(CHIP_W) | set(TECH_W) | set(VAL_W)
+    keys = set(FUND_W) | set(CHIP_W) | set(TECH_W) | set(VAL_W) | {"avgval"}
     ranks = {k: pct_rank({c: m.get(k) for c, m in uni.items()}) for k in keys}
 
     stocks = []
@@ -737,6 +801,8 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
             vw = sum(w for _, w in vparts)
             sc["value"] = round(sum(v * w for v, w in vparts) / vw, 1) if vw >= 0.5 else None
             sc["sup"] = m.get("sup_score")
+            sc["liq"] = round(ranks["avgval"][code] * 100, 1)
+            m["rules"] = rule_hits(m, ranks["avgval"].get(code), ranks["rev3"].get(code))
             for name, wts in STRATS.items():
                 parts = [(sc[k], w) for k, w in wts.items() if sc.get(k) is not None]
                 tw = sum(w for _, w in parts)
@@ -855,6 +921,8 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
         "weights": {"strats": STRATS, "fund": FUND_W, "chip": CHIP_W, "tech": TECH_W, "value": VAL_W},
         "min_avg_value": MIN_AVG_VALUE,
         "stocks": stocks,
+        "etfs": etfs,
+        "rules": RULES,
     }
 
 

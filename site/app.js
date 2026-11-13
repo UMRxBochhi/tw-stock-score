@@ -35,11 +35,12 @@ const F = {
   short: { t: "短線分數", short: "短線", g: (s) => s.s.short, kind: "total", grp: "分數" },
   long: { t: "長線分數", short: "長線", g: (s) => s.s.long, kind: "total", grp: "分數" },
   d5: { t: "5 日分數變化（目前策略）", short: "5日Δ", g: (s) => s.s["d5_" + state.strat], kind: "signed1", suf: "", grp: "分數" },
-  value: { t: "估值分數", short: "估值", g: (s) => s.s.value, kind: "bar", grp: "分數" },
-  sup: { t: "支撐位置分數", short: "支撐", g: (s) => s.s.sup, kind: "bar", grp: "分數" },
-  fund: { t: "基本面分數", short: "基本面", g: (s) => s.s.fund, kind: "bar", grp: "分數" },
-  chip: { t: "籌碼面分數", short: "籌碼面", g: (s) => s.s.chip, kind: "bar", grp: "分數" },
-  tech: { t: "趨勢分數", short: "趨勢", g: (s) => s.s.tech, kind: "bar", grp: "分數" },
+  liq: { t: "流動性分數（成交金額規模）", short: "流動性", g: (s) => s.s.liq, kind: "bar", grp: "分數" },
+  value: { t: "估值（參考，不計分）", short: "估值*", g: (s) => s.s.value, kind: "bar", grp: "分數" },
+  sup: { t: "支撐位置（參考，不計分）", short: "支撐*", g: (s) => s.s.sup, kind: "bar", grp: "分數" },
+  fund: { t: "營收成長分數", short: "營收", g: (s) => s.s.fund, kind: "bar", grp: "分數" },
+  chip: { t: "外資分數", short: "外資", g: (s) => s.s.chip, kind: "bar", grp: "分數" },
+  tech: { t: "趨勢（參考，不計分）", short: "趨勢*", g: (s) => s.s.tech, kind: "bar", grp: "分數" },
   sup_dist: { t: "距前波支撐 %（負 = 已跌破）", short: "距支撐", g: (s) => s.m.sup_dist, kind: "signed1", grp: "支撐" },
   sup_broke: { t: "跌破前波低點（1 = 是、0 = 否）", short: "破底", g: (s) => s.m.sup_broke == null ? null : (s.m.sup_broke ? 1 : 0), kind: "num0", grp: "支撐" },
   vsup_dist: { t: "距大量支撐 %", short: "距大量", g: (s) => s.m.vsup_dist, kind: "signed1", grp: "支撐" },
@@ -68,7 +69,7 @@ const F = {
 };
 const LABEL = { rev_yoy: "月營收年增率", accel: "營收動能", cum_yoy: "累計營收年增率", roe: "ROE（年化）", gm: "毛利率",
   f20: "外資 20 日買超 / 成交量", t20: "投信 20 日買超 / 成交量", i5: "三大法人 5 日買超 / 成交量",
-  r20: "20 日漲跌幅", b60: "股價相對 60 日均線（季線）", pe_cheap: "本益比位階（越低越好）", yld: "殖利率", pb_cheap: "股價淨值比（越低越好）", val_cheap: "河流圖位階（預估本益比優先；位階 30% = 70 分）" };
+  r20: "20 日漲跌幅", b60: "股價相對 60 日均線（季線）", streak: "營收連續年增月數", rev3: "近 3 月營收年增", pe_cheap: "本益比位階（越低越好）", yld: "殖利率", pb_cheap: "股價淨值比（越低越好）", val_cheap: "河流圖位階（預估本益比優先；位階 30% = 70 分）" };
 
 function cell(key, s) {
   const f = F[key], v = f.g(s), suf = f.suf ?? "";
@@ -84,13 +85,14 @@ function cell(key, s) {
 }
 
 const TABCOLS = {
-  win: ["p", "chg", "r20", "short", "long", "d5", "value", "sup", "fund", "chip", "tech"],
+  pick: ["p", "chg", "r20", "long", "short", "streak", "rev3", "accel", "f20", "avgval", "vpos", "sup_dist"],
+  win: ["p", "chg", "r20", "short", "long", "d5", "fund", "liq", "chip", "value", "sup"],
   value: ["p", "yld", "pe", "fpe", "vpos", "sup_dist", "accel", "long"],
   watch: ["p", "chg", "r20", "short", "long", "d5", "fpe", "vpos", "sup_dist", "accel"],
   screen: ["p", "chg", "short", "long", "d5", "fpe", "vpos", "sup_dist", "vsup_dist", "accel", "roe", "f20", "t20"],
 };
-const DEFAULT_SORT = { win: ["$strat", false], value: ["long", false], watch: ["$strat", false], screen: ["$strat", false] };
-const HIDE_SM = new Set(["chg", "value", "sup", "fund", "chip", "tech", "pb", "pe", "d5", "roe", "f20", "t20", "rev_yoy", "vsup_dist", "r20"]);
+const DEFAULT_SORT = { pick: ["$strat", false], win: ["$strat", false], value: ["long", false], watch: ["$strat", false], screen: ["$strat", false] };
+const HIDE_SM = new Set(["chg", "value", "sup", "fund", "chip", "tech", "liq", "streak", "rev3", "avgval", "vpos", "sup_dist", "accel", "pb", "pe", "d5", "roe", "f20", "t20", "rev_yoy", "vsup_dist", "r20"]);
 
 // ---------- 快速篩選
 const PRESETS = {
@@ -103,7 +105,7 @@ const PRESETS = {
   vsupport: { t: "站在大量支撐上（5% 內）", f: { vsup_dist: [0, 5] } },
   broke: { t: "跌破前波低點（避開）", f: { sup_broke: [1, 1] } },
   river_cheap: { t: "河流圖便宜區（預估位階 ≤ 20%）", f: { vpos: [null, 20] } },
-  long_core: { t: "長線核心（長線≥70、營收動能不轉弱）", f: { long: [70, null], accel: [-5, null] } },
+  long80: { t: "長線分數 ≥ 80（回測勝率最高的區間）", f: { long: [80, null] } },
   foreign: { t: "外資大買", f: { f20: [5, null] } },
   quality: { t: "高 ROE＋高毛利", f: { roe: [15, null], gm: [30, null] } },
   score_up: { t: "5 日分數大進步", f: { d5: [10, null] } },
@@ -113,6 +115,7 @@ const PRESETS = {
 function baseList() {
   const all = state.data.stocks;
   switch (state.tab) {
+    case "pick": return all.filter((s) => (s.m.rules || []).includes(ruleId()));
     case "win": return all.filter((s) => s.s[state.strat] != null);
     case "value": return all.filter((s) => s.m.liquid && s.m.pe > 0 && (s.m.fpe_pos ?? s.m.pe_pos) != null &&
       (s.m.fpe_pos ?? s.m.pe_pos) <= VALUE_PEPOS && (s.m.accel == null || s.m.accel > -10));
@@ -170,8 +173,11 @@ function renderTable() {
     : `<p class="empty">${empty}</p>`;
 }
 
+const ruleId = () => state.strat === "long" ? "long_core" : "short_core";
+
 function flagHtml(s) {
   const m = s.m;
+  if ((m.rules || []).includes("long_core") && state.tab !== "pick") return ' <span class="flag good" title="符合長線核心選股規則">長線核心</span>';
   if (m.sup_broke) return ' <span class="flag warn" title="收盤價跌破最近一個波段低點">破前低</span>';
   if (m.accel != null && m.accel <= -10) return ' <span class="flag warn" title="近 3 月營收年增明顯低於近 12 月">動能轉弱</span>';
   if (m.accel != null && m.accel >= 10 && (m.rev3 ?? 0) > 0) return ' <span class="flag good" title="近 3 月營收年增明顯高於近 12 月">動能轉強</span>';
@@ -241,6 +247,47 @@ function renderIndustries() {
     </tbody></table></div><p class="note">依目前策略（${STRAT_NAME[k]}）排序。點產業會切到選股器並只顯示該產業。</p>`;
 }
 
+// ---------- 策略選股
+function renderRuleInfo() {
+  const id = ruleId(), r = state.data.rules?.[id], bt = state.bt?.rules?.[id];
+  if (!r) { $("#ruleInfo").innerHTML = ""; return; }
+  const st = (x, lab) => x ? `<div class="card"><div class="lbl">${lab}</div><div class="val">${x.win}%</div>
+      <div class="note">贏過同期中位數的比例・平均超額 ${signed(x.avg_ex, 1)}<br>絕對報酬為正 ${x.pos}%・平均每期 ${x.n_per} 檔</div></div>` : "";
+  $("#ruleInfo").innerHTML = `<div class="rulebox">
+    <div><b>${esc(r.t)}</b>
+      <p class="note">持有 ${bt?.h ?? (r.h === "long" ? 60 : 20)} 個交易日（約 ${r.h === "long" ? "3 個月" : "1 個月"}）。上方切換「短線 / 長線」可換規則。
+      ${r.h === "short" ? "短線規則在驗證期勝率未達 60%，僅供參考。" : ""}</p></div>
+    <div class="market">${st(bt?.train, "回測勝率（訓練期）")}${st(bt?.test, "回測勝率（驗證期）")}${st(bt?.all, "回測勝率（全期）")}</div>
+    <p class="note">回測期間 2024/10 起，只用當時已公布的資料；勝率是過去統計，不保證未來。同時符合的股票建議分散持有，不要只押一檔。</p></div>`;
+}
+
+let etfState = { kind: "", sort: "avgval", asc: false };
+function renderETF() {
+  const all = state.data.etfs || [];
+  const kinds = ["", ...new Set(all.map((e) => e.kind))];
+  const q = (state.etfQ || "").toLowerCase();
+  let list = all.filter((e) => (!etfState.kind || e.kind === etfState.kind) && (!q || e.c.toLowerCase().includes(q) || (e.n || "").toLowerCase().includes(q)));
+  const k = etfState.sort, dir = etfState.asc ? 1 : -1;
+  list = [...list].sort((a, b) => (a[k] == null) - (b[k] == null) || ((a[k] > b[k] ? 1 : a[k] < b[k] ? -1 : 0) * dir));
+  const th = (key, t, cls = "") => `<th data-ek="${key}" class="${cls} ${etfState.sort === key ? "sorted" + (etfState.asc ? " asc" : "") : ""}">${t}</th>`;
+  $("#page").innerHTML = `
+    <div class="filters"><input id="etfQ" type="search" placeholder="代號或名稱，例如 0050、高股息" value="${esc(state.etfQ || "")}">
+      <span class="seg" id="etfKind">${kinds.map((x) => `<button data-k="${x}" class="${etfState.kind === x ? "on" : ""}">${x || "全部"}</button>`).join("")}</span>
+      <span class="count">共 ${list.length} 檔</span></div>
+    <div class="tablebox"><table><thead><tr>${th("c", "ETF", "l")}${th("kind", "類型", "l hide-sm")}${th("p", "收盤")}${th("chg", "今日")}${th("r20", "20日")}${th("r60", "60日", "hide-sm")}${th("r120", "120日", "hide-sm")}${th("b60", "距季線", "hide-sm")}${th("avgval", "均量(億)")}${th("inst20", "法人20日", "hide-sm")}${th("yld", "殖利率", "hide-sm")}</tr></thead>
+    <tbody>${list.slice(0, 300).map((e) => `<tr><td class="l"><span class="code">${e.c}</span>${esc(e.n)}</td><td class="l hide-sm"><span class="ind">${e.kind}</span></td>
+      <td>${fmt(e.p)}</td><td>${signed(e.chg)}</td><td>${signed(e.r20, 1)}</td><td class="hide-sm">${signed(e.r60, 1)}</td><td class="hide-sm">${signed(e.r120, 1)}</td>
+      <td class="hide-sm">${signed(e.b60, 1)}</td><td>${fmt(e.avgval / 1e8)}</td><td class="hide-sm">${signed(e.inst20)}</td><td class="hide-sm">${fmt(e.yld, 2, "%")}</td></tr>`).join("")}</tbody></table></div>
+    <p class="note">ETF 沒有營收與本益比，不評分；依成交金額排序（流動性越好，買賣價差越小）。法人 20 日 = 三大法人 20 日買超 ÷ 成交量。殖利率有資料才顯示。</p>`;
+  $("#etfQ").oninput = (e) => { state.etfQ = e.target.value; renderETF(); const el = $("#etfQ"); el.focus(); el.setSelectionRange(el.value.length, el.value.length); };
+  $("#etfKind").onclick = (e) => { const b = e.target.closest("button"); if (b) { etfState.kind = b.dataset.k; renderETF(); } };
+  $$("th[data-ek]").forEach((h) => h.onclick = () => {
+    const key = h.dataset.ek;
+    if (etfState.sort === key) etfState.asc = !etfState.asc; else { etfState.sort = key; etfState.asc = key === "c" || key === "kind"; }
+    renderETF();
+  });
+}
+
 // ---------- 回測
 function btBand(strat, score) {
   const r = state.bt?.strats?.[strat]?.current?.all?.bands;
@@ -280,16 +327,18 @@ function renderHow() {
   const pct = (x) => Math.round(x * 100) + "%";
   const list = (o) => Object.entries(o).map(([k, v]) => `<tr><td>${LABEL[k] || k}</td><td>${pct(v)}</td></tr>`).join("");
   $("#page").innerHTML = `<div class="how">
-    <h3>兩種策略分數</h3>
+    <h3>分數怎麼來的：依回測結果設計</h3>
+    <p>2024/10~2026/10 的回測（每週一次、只用當時已公布的資料）中，<b>真正有預測力的只有三類</b>：營收成長（尤其是連續年增月數）、流動性（成交金額規模）、外資買超。
+       估值（河流圖）、支撐位置、趨勢在回測中沒有預測力，因此<b>不計分</b>，但仍顯示在個股頁供參考。</p>
     <table><tr><th>面向</th><th>短線</th><th>長線</th></tr>
-      ${["value", "sup", "fund", "chip", "tech"].map((k) => `<tr><td>${{ value: "估值（河流圖位階、殖利率、PB）", sup: "支撐位置", fund: "基本面", chip: "籌碼面", tech: "趨勢" }[k]}</td>
+      ${["fund", "liq", "chip"].map((k) => `<tr><td>${{ fund: "營收成長（連續年增、近3月、動能、累計）", liq: "流動性（20 日均成交金額排名）", chip: "外資 20 日買超" }[k]}</td>
         <td>${w.strats.short[k] ? pct(w.strats.short[k]) : "—"}</td><td>${w.strats.long[k] ? pct(w.strats.long[k]) : "—"}</td></tr>`).join("")}</table>
-    <p class="note">短線看「籌碼有沒有在買、股價是不是剛好在支撐上、趨勢強不強」；長線看「便不便宜、公司有沒有在成長」。上方可切換策略，排行與篩選都會跟著變。</p>
-    <h3>支撐位置分數</h3>
+    <p class="note">回測期間是 AI 多頭行情，大型成長股表現特別好；市場風格轉換時，這些規律可能減弱。分數與勝率請當參考，不是保證。</p>
+    <h3>支撐位置（參考）</h3>
     <p><b>前波支撐</b>：近 130 個交易日內的波段低點（前後各 10 日內最低）。收盤價跌破最近一個波段低點 = <b>破前低</b>，分數直接給很低。<br>
        <b>大量支撐</b>：把近 130 日的成交金額依價位分 24 格（分價量表），成交特別多的價位代表很多人在那裡買，常成為支撐或壓力。<br>
        分數依「離支撐多近」給分：沒跌破且在支撐上方 3% 內 100 分、6% 內 85、10% 內 65、15% 內 45，更遠 30。兩種支撐各算一次取平均。</p>
-    <h3>估值分數</h3><table>${list(w.value)}</table>
+    <h3>估值（參考）</h3><table>${list(w.value)}</table>
     <p class="note">本益比來自證交所，用的是「已正式申報」的近四季 EPS。財報季期間（法說會後到申報期限前），高成長股的本益比會暫時偏高，申報後自動修正。
        <b>預估本益比（Forward PE）</b>：沒有免費的法人預估，改用「近四季 EPS ×（1 + 預估成長率）」推估未來 12 個月 EPS，
        成長率 = 近 3 月與近 12 月營收年增率平均（限制在 −50%~+80%），假設利潤率不變。估值分數用預估本益比在自己 5 年本益比歷史中的位階，直接換算（位階 30% = 70 分）。
@@ -297,13 +346,13 @@ function renderHow() {
     <p>每一項指標（支撐位置除外）先在「列入評分的股票」裡排名，換成 0~100 的百分位（贏過多少比例的股票），再依權重加總。
        分數是<b>相對排名</b>：70 分代表綜合起來贏過約七成的股票，不是「70% 機率會漲」。</p>
     <p>列入評分：一般上市股票（排除 ETF），且近 20 日平均成交金額 ≥ ${(state.data.min_avg_value / 1e8).toFixed(1)} 億。某項資料缺漏時，用其餘指標重新分配權重。</p>
-    <h3>基本面</h3><table>${list(w.fund)}</table>
+    <h3>營收成長</h3><table>${list(w.fund)}</table>
     <p class="note"><b>營收動能</b> = 近 3 個月營收年增率 − 近 12 個月營收年增率。正值代表成長在加速，負值代表成長在放緩；
        ≤ −10 會標示「動能轉弱」，可視為營收預期可能下修的訊號。<br>
        <b>全年營收推估</b> = 今年已公布的累計營收 + 去年剩餘月份營收 ×（1 + 近 3 月年增率）。這是簡單外推，不是法人預估。</p>
-    <h3>籌碼面</h3><table>${list(w.chip)}</table>
+    <h3>外資</h3><table>${list(w.chip)}</table>
     <p class="note">買超比例 = 期間內法人買超股數 ÷ 同期間總成交股數，大型股小型股才能公平比較。</p>
-    <h3>趨勢</h3><table>${list(w.tech)}</table>
+    <h3>趨勢（參考）</h3><table>${list(w.tech)}</table>
     <h3>本益比位階與河流圖</h3>
     <p>每月取樣一次本益比，共 5 年。位階 = 歷史取樣中比現在低的比例。河流圖的各條線 = 歷史本益比的 10/30/50/70/90 百分位 × 當時的近四季 EPS（由收盤價 ÷ 本益比反推）。
        股價在下緣代表以自己的歷史看偏便宜，上緣代表偏貴。</p>
@@ -323,7 +372,10 @@ function render() {
   $("#filters").hidden = !isList;
   $("#adv").hidden = !isList || !state.advOpen;
   $("#page").hidden = isList;
+  $("#ruleInfo").hidden = t !== "pick";
+  if (t === "pick") renderRuleInfo();
   if (isList) renderTable();
+  else if (t === "etf") renderETF();
   else if (t === "ind") renderIndustries();
   else if (t === "bt") renderBacktest();
   else renderHow();
@@ -348,6 +400,7 @@ function setStrat(k) {
   renderMarket();
   render();
 }
+
 
 function toggleWatch(code) {
   state.watch.has(code) ? state.watch.delete(code) : state.watch.add(code);
@@ -377,7 +430,9 @@ async function showDetail(code) {
           <div class="${state.strat === "short" ? "cur" : ""}"><span class="big">${s.s.short == null ? "—" : s.s.short.toFixed(0)}</span><span class="sub">短線 ${s.s.d5_short != null ? "5日 " + signed(s.s.d5_short, 1, "") : ""}</span></div>
           <div class="${state.strat === "long" ? "cur" : ""}"><span class="big">${s.s.long == null ? "—" : s.s.long.toFixed(0)}</span><span class="sub">長線 ${s.s.d5_long != null ? "5日 " + signed(s.s.d5_long, 1, "") : ""}</span></div>
         </div>
-        <div class="subscores">${sub("估值", s.s.value)}${sub("支撐位置", s.s.sup)}${sub("基本面", s.s.fund)}${sub("籌碼面", s.s.chip)}${sub("趨勢", s.s.tech)}</div>
+        <div class="subscores">${sub("營收成長", s.s.fund)}${sub("流動性", s.s.liq)}${sub("外資", s.s.chip)}
+          <div class="note" style="margin:8px 0 2px">參考（回測無預測力，不計分）</div>${sub("估值", s.s.value)}${sub("支撐位置", s.s.sup)}${sub("趨勢", s.s.tech)}</div>
+        ${(m.rules || []).map((r) => `<span class="chip good">符合${r === "long_core" ? "長線核心" : "短線"}選股規則</span>`).join(" ")}
       </div>
       <div class="pricebox"><div class="val">${fmt(m.p)}</div><div>${signed(m.chg)} 今日</div><div>${signed(m.r20, 1)} 20 日</div></div>
     </div>
@@ -659,10 +714,10 @@ fetch("data/latest.json", { cache: "no-cache" })
     $("#ind").insertAdjacentHTML("beforeend", inds.map((i) => `<option>${esc(i)}</option>`).join(""));
     $("#preset").insertAdjacentHTML("beforeend", Object.entries(PRESETS).map(([k, p]) => `<option value="${k}">${p.t}</option>`).join(""));
     $$("#strat button").forEach((b) => b.classList.toggle("on", b.dataset.s === state.strat));
-    fetch("data/backtest.json", { cache: "no-cache" }).then((r) => r.ok ? r.json() : null).then((b) => { state.bt = b; }).catch(() => {});
+    fetch("data/backtest.json", { cache: "no-cache" }).then((r) => r.ok ? r.json() : null).then((b) => { state.bt = b; render(); }).catch(() => {});
     renderMarket();
     renderAdv();
-    setTab("win");
+    setTab("pick");
     const c = location.hash.slice(1);
     if (c) showDetail(c);
   })

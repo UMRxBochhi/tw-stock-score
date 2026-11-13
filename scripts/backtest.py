@@ -69,7 +69,7 @@ def cum_yoy(h, last):
     return round((sum(cur) / sum(prev) - 1) * 100, 2)
 
 
-def main():
+def build_records():
     px = load_hist("px")
     px.update({d: {c: (v + [v[0], v[0]] if len(v) == 3 else v) for c, v in rows.items()}
                for d, rows in u.load("prices.json", {}).items()})
@@ -102,7 +102,7 @@ def main():
             r = rows[code][ti]
             if not r:
                 continue
-            ser = [x for x in rows[code][ti - LOOKBACK + 1:ti + 1] if x]
+            ser = u.after_split([x for x in rows[code][ti - LOOKBACK + 1:ti + 1] if x])
             if len(ser) < 60:
                 continue
             avg_val = sum(x[2] for x in ser[-20:]) / 20
@@ -112,6 +112,11 @@ def main():
             m = {"p": p}
             closes = [x[0] for x in ser]
             m["b60"] = (p / (sum(closes[-60:]) / 60) - 1) * 100
+            vals = [x[2] for x in ser]
+            m["vr"] = (sum(vals[-5:]) / 5) / (sum(vals[-60:]) / 60) if sum(vals[-60:]) else None  # 量能放大倍數
+            m["lv"] = math.log10(avg_val)                                                      # 流動性（規模）
+            m["r20"] = (p / closes[-21] - 1) * 100
+            m["r60"] = (p / closes[-61] - 1) * 100 if len(closes) > 60 else None
             lv = u.support_levels(ser)
             m["sup_score"] = lv.get("sup_score")
             if len(tds) >= 10:
@@ -123,6 +128,7 @@ def main():
             if h:
                 rm = u.revenue_metrics(h)
                 m["accel"] = rm.get("accel")
+                m["rev3"], m["rev12"], m["streak"] = rm.get("rev3"), rm.get("rev12"), rm.get("streak")
                 m["cum_yoy"] = cum_yoy(h, max(h))
                 gs = [x for x in (rm.get("rev3"), rm.get("rev12")) if x is not None]
             else:
@@ -144,22 +150,26 @@ def main():
             # 未來報酬
             for name, hz in HORIZON.items():
                 if ti + hz < N and rows[code][ti + hz]:
-                    m["fwd_" + name] = rows[code][ti + hz][0] / p - 1
+                    path = [x for x in rows[code][ti:ti + hz + 1] if x]
+                    if len(u.after_split(path)) == len(path):   # 持有期間有分割/減資就不計
+                        m["fwd_" + name] = rows[code][ti + hz][0] / p - 1
             snap[code] = m
-        # 超額報酬
+        # 超額報酬：相對同期「中位數」（隨機挑股的勝率基準 = 50%）
         for name in HORIZON:
-            fw = [m["fwd_" + name] for m in snap.values() if "fwd_" + name in m]
+            fw = sorted(m["fwd_" + name] for m in snap.values() if "fwd_" + name in m)
             if len(fw) >= 30:
-                avg = sum(fw) / len(fw)
+                med = fw[len(fw) // 2]
                 for m in snap.values():
                     if "fwd_" + name in m:
-                        m["ex_" + name] = m["fwd_" + name] - avg
+                        m["ex_" + name] = m["fwd_" + name] - med
         # 分數（與上線版相同規則）
-        keys = ["cum_yoy", "accel", "f20", "t20", "b60"]
+        keys = set(u.FUND_W) | set(u.CHIP_W) | set(u.TECH_W) | {"lv"}
         ranks = {k: u.pct_rank({c: m.get(k) for c, m in snap.items()}) for k in keys}
         for c, m in snap.items():
+            m["rules"] = u.rule_hits(m, ranks["lv"].get(c), ranks["rev3"].get(c))
             sc = {
-                "fund": u.combine(ranks, {"cum_yoy": 0.6, "accel": 0.4}, c),
+                "liq": ranks["lv"][c] * 100 if c in ranks["lv"] else None,
+                "fund": u.combine(ranks, u.FUND_W, c),
                 "chip": u.combine(ranks, u.CHIP_W, c),
                 "tech": u.combine(ranks, u.TECH_W, c),
                 "value": round(100 + m["val_cheap"], 1) if m.get("val_cheap") is not None else None,
@@ -168,6 +178,11 @@ def main():
             m["sc"] = sc
         records.append((t, snap))
         u.log(f"  {t}：{len(snap)} 檔")
+    return records
+
+
+def main():
+    records = build_records()
 
     def strat_score(sc, wts):
         parts = [(sc[k], w) for k, w in wts.items() if sc.get(k) is not None]
@@ -178,11 +193,11 @@ def main():
     report = {"period": [records[0][0], records[-1][0]] if records else None, "n_dates": len(records),
               "train_until": records[n_train - 1][0] if n_train else None,
               "notes": ["ROE、殖利率沒有歷史資料，回測中不計入", "本益比位階用月取樣依股價換算，屬近似",
-                        "超額報酬 = 個股報酬 − 同期所有評分股票平均"],
+                        "超額報酬 = 個股報酬 − 同期所有評分股票的中位數（隨機挑股勝率約 50%）"],
               "strats": {}, "ic": {}}
 
-    comps = ["fund", "chip", "tech", "value", "sup"]
-    raw = ["cum_yoy", "accel", "f20", "t20", "b60", "sup_score", "val_cheap"]
+    comps = ["fund", "liq", "chip", "tech", "value", "sup"]
+    raw = ["streak", "rev3", "cum_yoy", "accel", "f20", "t20", "b60", "vr", "lv", "sup_score", "val_cheap"]
 
     def ic_table(name, recs):
         out = {}
@@ -259,6 +274,22 @@ def main():
             "calibrated": {"all": evaluate(name, recs, cal), "test": res_cal_test},
             "calibrated_better_on_test": (res_cal_test["ic"] or -9) > (res_cur_test["ic"] or -9),
         }
+    # 策略選股規則：每檔被選中的股票是否贏過同期中位數
+    report["rules"] = {}
+    for rid, rule in u.RULES.items():
+        name = rule["h"]
+        recs = [r for r in records if any("ex_" + name in m for m in r[1].values())]
+        nt = int(len(recs) * TRAIN_FRAC)
+        out = {"h": u.STRATS and HORIZON[name], "t": rule["t"]}
+        for lab, part in (("all", recs), ("train", recs[:nt]), ("test", recs[nt:])):
+            ex = [m["ex_" + name] for _, s in part for m in s.values() if rid in m.get("rules", []) and "ex_" + name in m]
+            raw_ret = [m["fwd_" + name] for _, s in part for m in s.values() if rid in m.get("rules", []) and "fwd_" + name in m]
+            if ex:
+                out[lab] = {"n_per": round(len(ex) / len(part), 1), "win": round(sum(1 for x in ex if x > 0) / len(ex) * 100, 1),
+                            "avg_ex": round(sum(ex) / len(ex) * 100, 2),
+                            "pos": round(sum(1 for x in raw_ret if x > 0) / len(raw_ret) * 100, 1),
+                            "avg_ret": round(sum(raw_ret) / len(raw_ret) * 100, 2)}
+        report["rules"][rid] = out
     u.save("backtest.json", report)
     u.log(json.dumps(report["strats"], ensure_ascii=False)[:3000])
 

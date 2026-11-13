@@ -214,3 +214,6 @@ footer { margin-top: 24px; color: var(--text-muted); font-size: 12px; line-heigh
   #detail { padding: 16px 14px 40px; }
   .big { font-size: 34px; }
 }
+
+.rulebox { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
+.rulebox .market { margin-top: 8px; }
