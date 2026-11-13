@@ -44,21 +44,44 @@ STRATS = {
 }
 # 策略選股規則（回測驗證期勝率見網頁「策略選股」）
 RULES = {
-    "long_core": {"h": "long", "t": "長線核心：營收連續年增 ≥ 12 個月＋成交金額前 30%＋近 3 月營收成長前 50%"},
-    "short_core": {"h": "short", "t": "短線：營收連續年增 ≥ 12 個月＋營收動能 > 0＋成交金額前 30%"},
+    "long_core": {"h": "long", "n": 5, "t": "長線核心：營收連續年增 ≥ 12 個月＋成交金額前 30%＋近 3 月營收成長前 50%＋排除乖離過大"},
+    "short_core": {"h": "short", "n": 3, "t": "短線回檔買：營收連續年增 ≥ 12 個月＋營收動能 > 0＋成交金額前 30%＋股價在 20 日線下"},
 }
+# 精選：符合規則的股票中，外資 20 日買超比例最高的前 N 檔（回測中排序方式以訓練期表現選出）
+
+
+def top_picks(cands: list, rid: str):
+    """cands: [(code, m), ...] → 精選代號"""
+    c = [(code, m) for code, m in cands if rid in (m.get("rules") or [])]
+    c.sort(key=lambda x: -(x[1].get("f20") if x[1].get("f20") is not None else -999))
+    return [code for code, _ in c[:RULES[rid]["n"]]]
+# 乖離過大：20 日乖離 > +20% 或季線乖離 > +50%。回測中這類股票勝率掉到 50% 上下 → 分數扣分、選股排除
+OVER_B20, OVER_B60, OVER_PENALTY = 20.0, 50.0, 15.0
+
+
+def is_over(m: dict) -> bool:
+    return (m.get("b20") or 0) > OVER_B20 or (m.get("b60") or 0) > OVER_B60
 
 
 def rule_hits(m: dict, liq_pct, rev3_pct):
     """liq_pct、rev3_pct：0~1 的百分位（在評分股票中）"""
     hits = []
     streak = m.get("streak") or 0
-    if streak >= 12 and liq_pct is not None and liq_pct >= 0.7:
+    if streak >= 12 and liq_pct is not None and liq_pct >= 0.7 and not is_over(m):
         if rev3_pct is not None and rev3_pct >= 0.5:
             hits.append("long_core")
-        if (m.get("accel") or -1) > 0:
+        if (m.get("accel") or -1) > 0 and m.get("b20") is not None and m["b20"] < 0:
             hits.append("short_core")
     return hits
+
+
+def strat_score(sc: dict, m: dict, wts: dict):
+    parts = [(sc[k], w) for k, w in wts.items() if sc.get(k) is not None]
+    tw = sum(w for _, w in parts)
+    if tw < 0.55:
+        return None
+    v = sum(x * w for x, w in parts) / tw
+    return round(max(0.0, v - OVER_PENALTY) if is_over(m) else v, 1)
 
 
 VAL_W = {"val_cheap": 0.80, "yld": 0.20}
@@ -688,6 +711,9 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
         n60 = closes[-60:]
         if len(n60) >= 40:
             m["b60"] = round((closes[-1] / (sum(n60) / len(n60)) - 1) * 100, 2)
+        if len(closes) >= 20:
+            m["b20"] = round((closes[-1] / (sum(closes[-20:]) / 20) - 1) * 100, 2)
+        m["over"] = is_over(m)
         # 籌碼：法人買超股數 / 同期間成交股數（%）
         vol_by_date = {d: prices[d][code][1] for d in pdates if code in prices[d]}
 
@@ -804,9 +830,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
             sc["liq"] = round(ranks["avgval"][code] * 100, 1)
             m["rules"] = rule_hits(m, ranks["avgval"].get(code), ranks["rev3"].get(code))
             for name, wts in STRATS.items():
-                parts = [(sc[k], w) for k, w in wts.items() if sc.get(k) is not None]
-                tw = sum(w for _, w in parts)
-                sc[name] = round(sum(v * w for v, w in parts) / tw, 1) if tw >= 0.55 else None
+                sc[name] = strat_score(sc, m, wts)
             m["pct"] = {k: round(ranks[k][code] * 100) for k in keys if code in ranks[k]}
         stocks.append({"c": code, "n": names.get(code, ""), "ind": (rev.get(code) or {}).get("ind"),
                        "s": sc, "m": m})
@@ -923,6 +947,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
         "stocks": stocks,
         "etfs": etfs,
         "rules": RULES,
+        "picks": {rid: top_picks([(x["c"], x["m"]) for x in stocks], rid) for rid in RULES},
     }
 
 

@@ -112,6 +112,7 @@ def build_records():
             m = {"p": p}
             closes = [x[0] for x in ser]
             m["b60"] = (p / (sum(closes[-60:]) / 60) - 1) * 100
+            m["b20"] = (p / (sum(closes[-20:]) / 20) - 1) * 100
             vals = [x[2] for x in ser]
             m["vr"] = (sum(vals[-5:]) / 5) / (sum(vals[-60:]) / 60) if sum(vals[-60:]) else None  # 量能放大倍數
             m["lv"] = math.log10(avg_val)                                                      # 流動性（規模）
@@ -184,10 +185,6 @@ def build_records():
 def main():
     records = build_records()
 
-    def strat_score(sc, wts):
-        parts = [(sc[k], w) for k, w in wts.items() if sc.get(k) is not None]
-        tw = sum(w for _, w in parts)
-        return sum(v * w for v, w in parts) / tw if tw >= 0.55 else None
 
     n_train = int(len(records) * TRAIN_FRAC)
     report = {"period": [records[0][0], records[-1][0]] if records else None, "n_dates": len(records),
@@ -221,7 +218,7 @@ def main():
         bands = {f"{lo}-{hi if hi <= 100 else 100}": [] for lo, hi in BANDS}
         top, bot, ics = [], [], []
         for _, snap in recs:
-            scored = {c: strat_score(m["sc"], wts) for c, m in snap.items()}
+            scored = {c: u.strat_score(m["sc"], m, wts) for c, m in snap.items()}
             ex = {c: m.get("ex_" + name) for c, m in snap.items()}
             for c, s in scored.items():
                 if s is None or ex[c] is None:
@@ -289,6 +286,24 @@ def main():
                             "avg_ex": round(sum(ex) / len(ex) * 100, 2),
                             "pos": round(sum(1 for x in raw_ret if x > 0) / len(raw_ret) * 100, 1),
                             "avg_ret": round(sum(raw_ret) / len(raw_ret) * 100, 2)}
+        # 精選前 N 檔（外資排序）
+        for lab, part in (("top_all", recs), ("top_train", recs[:nt]), ("top_test", recs[nt:])):
+            picks, bex, bret = [], [], []
+            for _, snap in part:
+                codes = u.top_picks(list(snap.items()), rid)
+                ms = [snap[c] for c in codes if "ex_" + name in snap[c]]
+                if not ms:
+                    continue
+                picks += [m["ex_" + name] for m in ms]
+                bex.append(sum(m["ex_" + name] for m in ms) / len(ms))
+                bret.append(sum(m["fwd_" + name] for m in ms) / len(ms))
+            if picks:
+                out[lab] = {"n": rule.get("n"), "periods": len(bex),
+                            "win": round(sum(1 for x in picks if x > 0) / len(picks) * 100, 1),
+                            "basket_win": round(sum(1 for x in bex if x > 0) / len(bex) * 100, 1),
+                            "basket_pos": round(sum(1 for x in bret if x > 0) / len(bret) * 100, 1),
+                            "avg_ret": round(sum(bret) / len(bret) * 100, 2),
+                            "worst": round(min(bret) * 100, 2)}
         report["rules"][rid] = out
     u.save("backtest.json", report)
     u.log(json.dumps(report["strats"], ensure_ascii=False)[:3000])

@@ -47,6 +47,7 @@ const F = {
   p: { t: "收盤價", short: "收盤", g: (s) => s.m.p, kind: "num", grp: "價格" },
   chg: { t: "今日漲跌 %", short: "今日", g: (s) => s.m.chg, kind: "signed", grp: "價格" },
   r20: { t: "20 日漲跌 %", short: "20日", g: (s) => s.m.r20, kind: "signed1", grp: "價格" },
+  b20: { t: "20 日乖離 %", short: "月乖離", g: (s) => s.m.b20, kind: "signed1", grp: "價格" },
   b60: { t: "股價相對 60 日均線 %", short: "距季線", g: (s) => s.m.b60, kind: "signed1", grp: "價格" },
   avgval: { t: "20 日均成交金額（億）", short: "均量(億)", g: (s) => s.m.avgval != null ? s.m.avgval / 1e8 : null, kind: "num", grp: "價格" },
   yld: { t: "殖利率 %", short: "殖利率", g: (s) => s.m.yld, kind: "num", suf: "%", grp: "價值" },
@@ -85,14 +86,14 @@ function cell(key, s) {
 }
 
 const TABCOLS = {
-  pick: ["p", "chg", "r20", "long", "short", "streak", "rev3", "accel", "f20", "avgval", "vpos", "sup_dist"],
-  win: ["p", "chg", "r20", "short", "long", "d5", "fund", "liq", "chip", "value", "sup"],
+  pick: ["p", "chg", "b20", "b60", "long", "short", "streak", "rev3", "accel", "f20", "avgval", "vpos"],
+  win: ["p", "chg", "b20", "b60", "short", "long", "d5", "fund", "liq", "chip", "value"],
   value: ["p", "yld", "pe", "fpe", "vpos", "sup_dist", "accel", "long"],
   watch: ["p", "chg", "r20", "short", "long", "d5", "fpe", "vpos", "sup_dist", "accel"],
   screen: ["p", "chg", "short", "long", "d5", "fpe", "vpos", "sup_dist", "vsup_dist", "accel", "roe", "f20", "t20"],
 };
 const DEFAULT_SORT = { pick: ["$strat", false], win: ["$strat", false], value: ["long", false], watch: ["$strat", false], screen: ["$strat", false] };
-const HIDE_SM = new Set(["chg", "value", "sup", "fund", "chip", "tech", "liq", "streak", "rev3", "avgval", "vpos", "sup_dist", "accel", "pb", "pe", "d5", "roe", "f20", "t20", "rev_yoy", "vsup_dist", "r20"]);
+const HIDE_SM = new Set(["b60", "chg", "value", "sup", "fund", "chip", "tech", "liq", "streak", "rev3", "avgval", "vpos", "sup_dist", "accel", "pb", "pe", "d5", "roe", "f20", "t20", "rev_yoy", "vsup_dist", "r20"]);
 
 // ---------- 快速篩選
 const PRESETS = {
@@ -115,7 +116,11 @@ const PRESETS = {
 function baseList() {
   const all = state.data.stocks;
   switch (state.tab) {
-    case "pick": return all.filter((s) => (s.m.rules || []).includes(ruleId()));
+    case "pick": {
+      if (state.pickAll) return all.filter((s) => (s.m.rules || []).includes(ruleId()));
+      const codes = state.data.picks?.[ruleId()] || [];
+      return codes.map((c) => all.find((s) => s.c === c)).filter(Boolean);
+    }
     case "win": return all.filter((s) => s.s[state.strat] != null);
     case "value": return all.filter((s) => s.m.liquid && s.m.pe > 0 && (s.m.fpe_pos ?? s.m.pe_pos) != null &&
       (s.m.fpe_pos ?? s.m.pe_pos) <= VALUE_PEPOS && (s.m.accel == null || s.m.accel > -10));
@@ -178,6 +183,7 @@ const ruleId = () => state.strat === "long" ? "long_core" : "short_core";
 function flagHtml(s) {
   const m = s.m;
   if ((m.rules || []).includes("long_core") && state.tab !== "pick") return ' <span class="flag good" title="符合長線核心選股規則">長線核心</span>';
+  if (m.over) return ' <span class="flag warn" title="20 日乖離 > 20% 或季線乖離 > 50%，回測勝率約 50%，已扣 15 分">乖離過大</span>';
   if (m.sup_broke) return ' <span class="flag warn" title="收盤價跌破最近一個波段低點">破前低</span>';
   if (m.accel != null && m.accel <= -10) return ' <span class="flag warn" title="近 3 月營收年增明顯低於近 12 月">動能轉弱</span>';
   if (m.accel != null && m.accel >= 10 && (m.rev3 ?? 0) > 0) return ' <span class="flag good" title="近 3 月營收年增明顯高於近 12 月">動能轉強</span>';
@@ -252,13 +258,16 @@ function renderRuleInfo() {
   const id = ruleId(), r = state.data.rules?.[id], bt = state.bt?.rules?.[id];
   if (!r) { $("#ruleInfo").innerHTML = ""; return; }
   const st = (x, lab) => x ? `<div class="card"><div class="lbl">${lab}</div><div class="val">${x.win}%</div>
-      <div class="note">贏過同期中位數的比例・平均超額 ${signed(x.avg_ex, 1)}<br>絕對報酬為正 ${x.pos}%・平均每期 ${x.n_per} 檔</div></div>` : "";
+      <div class="note">個股贏過同期中位數的比例<br>組合賺錢 ${x.basket_pos}% 的期數・平均 ${signed(x.avg_ret, 1)}<br>最差一期 ${signed(x.worst, 1)}・共 ${x.periods} 期</div></div>` : "";
   $("#ruleInfo").innerHTML = `<div class="rulebox">
     <div><b>${esc(r.t)}</b>
       <p class="note">持有 ${bt?.h ?? (r.h === "long" ? 60 : 20)} 個交易日（約 ${r.h === "long" ? "3 個月" : "1 個月"}）。上方切換「短線 / 長線」可換規則。
-      ${r.h === "short" ? "短線規則在驗證期勝率未達 60%，僅供參考。" : ""}</p></div>
-    <div class="market">${st(bt?.train, "回測勝率（訓練期）")}${st(bt?.test, "回測勝率（驗證期）")}${st(bt?.all, "回測勝率（全期）")}</div>
-    <p class="note">回測期間 2024/10 起，只用當時已公布的資料；勝率是過去統計，不保證未來。同時符合的股票建議分散持有，不要只押一檔。</p></div>`;
+      </p></div>
+    <p>精選：符合條件的股票中，<b>外資 20 日買超比例最高的前 ${r.n} 檔</b>，等權重買進、持有到期再重選。
+      <button class="ghost sm" id="pickAllBtn">${state.pickAll ? "只看精選 " + r.n + " 檔" : "顯示全部候補"}</button></p>
+    <div class="market">${st(bt?.top_train, `精選 ${r.n} 檔：訓練期勝率`)}${st(bt?.top_test, `精選 ${r.n} 檔：驗證期勝率`)}${st(bt?.top_all, `精選 ${r.n} 檔：全期勝率`)}</div>
+    <p class="note">回測期間 2024/10 起、每週一次，只用當時已公布的資料；勝率是過去統計，不保證未來。只買 ${r.n} 檔波動很大，請看「最差一期」評估自己承受得了。</p></div>`;
+  $("#pickAllBtn").onclick = () => { state.pickAll = !state.pickAll; render(); };
 }
 
 let etfState = { kind: "", sort: "avgval", asc: false };
@@ -333,6 +342,8 @@ function renderHow() {
     <table><tr><th>面向</th><th>短線</th><th>長線</th></tr>
       ${["fund", "liq", "chip"].map((k) => `<tr><td>${{ fund: "營收成長（連續年增、近3月、動能、累計）", liq: "流動性（20 日均成交金額排名）", chip: "外資 20 日買超" }[k]}</td>
         <td>${w.strats.short[k] ? pct(w.strats.short[k]) : "—"}</td><td>${w.strats.long[k] ? pct(w.strats.long[k]) : "—"}</td></tr>`).join("")}</table>
+    <p><b>乖離過大扣分</b>：20 日乖離 &gt; +20% 或季線乖離 &gt; +50% 的股票，回測中勝率掉到 50% 上下（雖然有些會繼續噴，但等於丟銅板），分數扣 15 分、也不列入策略選股。
+       短線選股另外要求股價在 20 日線下（回檔才買），回測勝率較穩定。</p>
     <p class="note">回測期間是 AI 多頭行情，大型成長股表現特別好；市場風格轉換時，這些規律可能減弱。分數與勝率請當參考，不是保證。</p>
     <h3>支撐位置（參考）</h3>
     <p><b>前波支撐</b>：近 130 個交易日內的波段低點（前後各 10 日內最低）。收盤價跌破最近一個波段低點 = <b>破前低</b>，分數直接給很低。<br>
@@ -534,6 +545,8 @@ const bt_h = (k) => state.bt?.strats?.[k]?.horizon ?? "";
 
 function signals(s) {
   const m = s.m, out = [];
+  if (m.over) out.push(["warn", `乖離過大（月乖離 ${m.b20 > 0 ? "+" : ""}${m.b20?.toFixed(1)}%、季線乖離 ${m.b60 > 0 ? "+" : ""}${m.b60?.toFixed(1)}%）：回測勝率約 50%，分數已扣 15`]);
+  else if (m.b20 != null && m.b20 < 0) out.push(["neutral", `回檔中（月乖離 ${m.b20.toFixed(1)}%）`]);
   const rz = riverZone(m);
   if (rz) out.push([rz[0], `${rz[1]}（${m.fpe_pos != null ? "預估" : ""}位階 ${(m.fpe_pos ?? m.pe_pos).toFixed(0)}%）`]);
   if (m.sup_broke) out.push(["warn", `跌破前波低點 ${m.sup_last}`]);
