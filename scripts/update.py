@@ -1036,6 +1036,9 @@ def main():
         bt = load("backtest.json", None)
         if bt:
             save("backtest.json", bt, OUT)
+        pool = load("pool.json", None)
+        if pool:
+            save("pool.json", pool, OUT)
         n = sum(1 for s in out["stocks"] if s["s"].get("long") is not None)
         log(f"輸出完成：{out['date']}，共 {len(out['stocks'])} 檔，有總分 {n} 檔")
     else:

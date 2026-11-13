@@ -324,6 +324,39 @@ def main():
                             "avg_ret": round(sum(bret) / len(bret) * 100, 2)}
         report["rules"][rid] = out
     u.save("backtest.json", report)
+    save_pool(records)
+
+
+POOL_BANDS = [0, 30, 40, 50, 60, 70, 80, 90]
+
+
+def band_of(v):
+    b = 0
+    for i, lo in enumerate(POOL_BANDS):
+        if v >= lo:
+            b = i
+    return b
+
+
+def save_pool(records):
+    """自選股推估用：每個歷史時間點、每個分數區間，股票後來的 [超額報酬, 報酬]（×1000 取整數）"""
+    pool = {"bands": POOL_BANDS, "h": HORIZON}
+    for name in HORIZON:
+        periods = []
+        for _, snap in records:
+            bins = [[] for _ in POOL_BANDS]
+            for m in snap.values():
+                if "ex_" + name not in m:
+                    continue
+                v = u.strat_score(m["sc"], m, u.STRATS[name])
+                if v is None:
+                    continue
+                hit = 1 if (("long_core" if name == "long" else "short_core") in m.get("rules", [])) else 0
+                bins[band_of(v)].append([round(m["ex_" + name] * 1000), round(m["fwd_" + name] * 1000), hit])
+            if any(bins):
+                periods.append(bins)
+        pool[name] = periods
+    u.save("pool.json", pool)
     u.log(json.dumps(report["strats"], ensure_ascii=False)[:3000])
 
 

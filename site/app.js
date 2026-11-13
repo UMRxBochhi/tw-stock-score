@@ -296,6 +296,81 @@ function renderRuleInfo() {
   $("#pickAllBtn").onclick = () => { state.pickAll = !state.pickAll; render(); };
 }
 
+// ---------- 自選股勝率推估
+async function loadPool() {
+  if (state.pool !== undefined) return state.pool;
+  try { state.pool = await (await fetch("data/pool.json", { cache: "no-cache" })).json(); } catch { state.pool = null; }
+  return state.pool;
+}
+const bandIdx = (bands, v) => bands.reduce((b, lo, i) => (v >= lo ? i : b), 0);
+
+function estimate(pool, strat, stocks) {
+  const P = pool[strat], bands = pool.bands;
+  // 單股：同分數區間全期統計
+  const agg = bands.map((_, i) => P.flatMap((per) => per[i]));
+  const rid = strat === "long" ? "long_core" : "short_core";
+  const one = stocks.map((s) => {
+    const b = bandIdx(bands, s.s[strat]);
+    const hit = (s.m.rules || []).includes(rid) ? 1 : 0;
+    const same = agg[b].filter((x) => x[2] === hit);
+    const useHit = same.length >= 300;            // 樣本夠才細分
+    const xs = useHit ? same : agg[b];
+    return { s, b, hit, useHit, n: xs.length, win: xs.filter((x) => x[0] > 0).length / xs.length * 100,
+      pos: xs.filter((x) => x[1] > 0).length / xs.length * 100, avg: xs.reduce((a, x) => a + x[1], 0) / xs.length / 10 };
+  });
+  // 組合：隨機抽歷史時間點，每檔從該期同區間抽一檔（保留同期股票一起漲跌的相關性）
+  const pick = (per, o) => {
+    for (let d = 0; d < bands.length; d++) for (const k of [o.b - d, o.b + d]) {
+      if (!per[k]?.length) continue;
+      const c = o.useHit ? per[k].filter((x) => x[2] === o.hit) : per[k];
+      const arr = c.length ? c : per[k];
+      return arr[Math.floor(Math.random() * arr.length)];
+    }
+    return null;
+  };
+  const ex = [], ret = [];
+  for (let it = 0; it < 4000; it++) {
+    const per = P[Math.floor(Math.random() * P.length)];
+    let se = 0, sr = 0, n = 0;
+    for (const o of one) { const x = pick(per, o); if (x) { se += x[0]; sr += x[1]; n++; } }
+    if (n) { ex.push(se / n / 10); ret.push(sr / n / 10); }
+  }
+  ret.sort((a, b) => a - b);
+  const q = (p) => ret[Math.floor(p * (ret.length - 1))];
+  return { one, win: ex.filter((x) => x > 0).length / ex.length * 100, pos: ret.filter((x) => x > 0).length / ret.length * 100,
+    avg: ret.reduce((a, x) => a + x, 0) / ret.length, p10: q(0.1), p50: q(0.5), p90: q(0.9) };
+}
+
+async function renderWatchInfo() {
+  const box = $("#watchInfo");
+  const strat = state.strat, list = state.data.stocks.filter((s) => state.watch.has(s.c));
+  const scored = list.filter((s) => s.s[strat] != null), unscored = list.filter((s) => s.s[strat] == null);
+  if (!list.length) { box.innerHTML = ""; return; }
+  box.innerHTML = '<div class="rulebox"><p class="note">推估中…</p></div>';
+  const pool = await loadPool();
+  if (!pool || !pool[strat]) { box.innerHTML = '<div class="rulebox"><p class="note">推估資料還沒產生（需要先跑回測）。</p></div>'; return; }
+  if (!scored.length) { box.innerHTML = '<div class="rulebox"><p class="note">自選股都沒有分數（成交量不足或資料不足），無法推估。</p></div>'; return; }
+  const r = estimate(pool, strat, scored), H = pool.h[strat];
+  const pc = (v) => `${v.toFixed(0)}%`;
+  box.innerHTML = `<div class="rulebox">
+    <b>自選股推估（${STRAT_NAME[strat]}：持有 ${H} 個交易日，約 ${strat === "long" ? "3 個月" : "1 個月"}）</b>
+    <span class="note">　上方切換短線 / 長線可換持有期間</span>
+    <div class="market">
+      <div class="card"><div class="lbl">組合贏過大盤（中位數）</div><div class="val">${pc(r.win)}</div><div class="note">${scored.length} 檔等金額</div></div>
+      <div class="card"><div class="lbl">組合賺錢機率</div><div class="val">${pc(r.pos)}</div><div class="note">平均報酬 ${signed(r.avg, 1)}</div></div>
+      <div class="card"><div class="lbl">報酬範圍（10% / 50% / 90%）</div><div class="val" style="font-size:18px">${signed(r.p10, 1)}　${signed(r.p50, 1)}　${signed(r.p90, 1)}</div>
+        <div class="note">10 次裡約有 1 次比左邊更差</div></div>
+    </div>
+    <table class="kv" style="margin-top:10px"><tr><td>股票</td><td>${STRAT_NAME[strat]}分數</td><td>贏過大盤</td><td>賺錢機率</td><td>歷史平均報酬</td><td>樣本</td></tr>
+      ${r.one.map((o) => `<tr><td><a href="#${o.s.c}" data-open="${o.s.c}">${o.s.c} ${esc(o.s.n)}</a>${(o.s.m.rules || []).length ? ' <span class="flag good">符合策略</span>' : ""}${o.s.m.over ? ' <span class="flag warn">乖離過大</span>' : ""}</td>
+        <td>${o.s.s[strat].toFixed(0)}（${pool.bands[o.b]}~${pool.bands[o.b + 1] ?? 100}${o.useHit ? (o.hit ? "、符合策略" : "、不符合策略") : ""}）</td><td>${pc(o.win)}</td><td>${pc(o.pos)}</td><td>${signed(o.avg, 1)}</td><td>${o.n.toLocaleString()}</td></tr>`).join("")}
+    </table>
+    ${unscored.length ? `<p class="note">沒有分數、未納入推估：${unscored.map((s) => esc(s.n)).join("、")}（成交量不足或資料不足）</p>` : ""}
+    <p class="note">推估方式：用 2024/10 起的回測，找「同分數區間、且同樣符合／不符合策略條件」的股票後來的實際表現（樣本不足 300 時只看分數區間）。組合是隨機抽歷史時間點、每檔從同期同區間各抽一檔，模擬 4,000 次，
+      保留同期股票一起漲跌的特性。這是歷史統計，個股本身的消息（財報、事件）不在模型內；回測期間為 AI 多頭，風格轉換時可能失準。</p>
+  </div>`;
+}
+
 let etfState = { kind: "", sort: "avgval", asc: false };
 function renderETF() {
   const all = state.data.etfs || [];
@@ -410,6 +485,8 @@ function render() {
   $("#adv").hidden = !isList || !state.advOpen;
   $("#page").hidden = isList;
   $("#ruleInfo").hidden = t !== "pick";
+  $("#watchInfo").hidden = t !== "watch";
+  if (t === "watch") renderWatchInfo();
   if (t === "pick") renderRuleInfo();
   if (isList) renderTable();
   else if (t === "etf") renderETF();
@@ -694,7 +771,7 @@ document.addEventListener("click", (e) => {
     toggleWatch(st.dataset.star);
     $$(`[data-star="${st.dataset.star}"]`).forEach((b) => { const on = state.watch.has(st.dataset.star); b.classList.toggle("on", on); b.textContent = on ? "★" : "☆"; });
     $("#watchN").textContent = state.watch.size ? `(${state.watch.size})` : "";
-    if (state.tab === "watch") renderTable();
+    if (state.tab === "watch") { renderTable(); renderWatchInfo(); }
     return;
   }
   const op = e.target.closest("[data-open]");
@@ -756,7 +833,8 @@ fetch("data/latest.json", { cache: "no-cache" })
     fetch("data/backtest.json", { cache: "no-cache" }).then((r) => r.ok ? r.json() : null).then((b) => { state.bt = b; render(); }).catch(() => {});
     renderMarket();
     renderAdv();
-    setTab("pick");
+    const qt = new URLSearchParams(location.search).get("tab");
+    setTab(qt && (TABCOLS[qt] || ["etf", "ind", "bt", "how"].includes(qt)) ? qt : "pick");
     const c = location.hash.slice(1);
     if (c) showDetail(c);
   })
