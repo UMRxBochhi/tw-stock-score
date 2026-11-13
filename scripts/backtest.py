@@ -116,6 +116,7 @@ def build_records():
             vals = [x[2] for x in ser]
             m["vr"] = (sum(vals[-5:]) / 5) / (sum(vals[-60:]) / 60) if sum(vals[-60:]) else None  # 量能放大倍數
             m["lv"] = math.log10(avg_val)                                                      # 流動性（規模）
+            m["avgval"] = avg_val
             m["r20"] = (p / closes[-21] - 1) * 100
             m["r60"] = (p / closes[-61] - 1) * 100 if len(closes) > 60 else None
             lv = u.support_levels(ser)
@@ -304,6 +305,23 @@ def main():
                             "basket_pos": round(sum(1 for x in bret if x > 0) / len(bret) * 100, 1),
                             "avg_ret": round(sum(bret) / len(bret) * 100, 2),
                             "worst": round(min(bret) * 100, 2)}
+        # 自己挑：從候選中隨機挑 N 檔（重複 200 次）的組合表現
+        import random
+        rnd = random.Random(7)
+        for lab, part in (("rand_train", recs[:nt]), ("rand_test", recs[nt:])):
+            bex, bret = [], []
+            for _ in range(200):
+                for _, snap in part:
+                    c = [m for m in snap.values() if rid in m.get("rules", []) and "ex_" + name in m]
+                    if not c:
+                        continue
+                    p = rnd.sample(c, min(rule["n"], len(c)))
+                    bex.append(sum(m["ex_" + name] for m in p) / len(p))
+                    bret.append(sum(m["fwd_" + name] for m in p) / len(p))
+            if bex:
+                out[lab] = {"basket_win": round(sum(1 for x in bex if x > 0) / len(bex) * 100, 1),
+                            "basket_pos": round(sum(1 for x in bret if x > 0) / len(bret) * 100, 1),
+                            "avg_ret": round(sum(bret) / len(bret) * 100, 2)}
         report["rules"][rid] = out
     u.save("backtest.json", report)
     u.log(json.dumps(report["strats"], ensure_ascii=False)[:3000])

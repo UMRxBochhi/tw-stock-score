@@ -257,16 +257,42 @@ function renderIndustries() {
 function renderRuleInfo() {
   const id = ruleId(), r = state.data.rules?.[id], bt = state.bt?.rules?.[id];
   if (!r) { $("#ruleInfo").innerHTML = ""; return; }
-  const st = (x, lab) => x ? `<div class="card"><div class="lbl">${lab}</div><div class="val">${x.win}%</div>
-      <div class="note">個股贏過同期中位數的比例<br>組合賺錢 ${x.basket_pos}% 的期數・平均 ${signed(x.avg_ret, 1)}<br>最差一期 ${signed(x.worst, 1)}・共 ${x.periods} 期</div></div>` : "";
+  const isL = r.h === "long";
+  const P = (x) => x != null ? x + "%" : "—";
+  const row = (lab, tr, te, k) => `<tr><td>${lab}</td><td>${P(tr?.[k])}</td><td>${P(te?.[k])}</td></tr>`;
+  const steps = isL ? [
+    "<b>篩選</b>：營收連續年增 ≥ 12 個月、20 日均成交金額 ≥ 10 億、不過熱（20 日乖離 ≤ +20% 且季線乖離 ≤ +50%）。三個條件都要符合。",
+    "<b>挑選</b>：從候選中挑 5 檔。優先挑「外資 20 日買超比例」較高的；盡量分散在不同產業，不要 5 檔都同一族群。",
+    "<b>買進</b>：5 檔等金額買進。過熱的不追，等它回到條件內再說。",
+    "<b>持有</b>：約 3 個月（60 個交易日）。期間不用每天看。",
+    "<b>檢查與換股</b>：到期時重新篩選。仍符合條件的續抱，不符合的賣出、換成新的候選。",
+    "<b>資金控管</b>：回測最差一期 5 檔組合約 −25%，投入金額要是你能承受短期跌 25% 的錢。",
+  ] : [
+    "<b>篩選</b>：營收連續年增 ≥ 12 個月、營收動能 > 0（近 3 月年增高於近 12 月）、20 日均成交金額 ≥ 10 億、股價在 20 日線下（回檔中）、不過熱。",
+    "<b>挑選</b>：從候選中挑 3 檔，優先外資 20 日買超比例高的。",
+    "<b>買進</b>：3 檔等金額。",
+    "<b>持有</b>：約 1 個月（20 個交易日），到期賣出、重新篩選。",
+    "<b>資金控管</b>：回測最差一期 3 檔組合約 −30%，短線波動比長線大，金額要更保守。",
+  ];
   $("#ruleInfo").innerHTML = `<div class="rulebox">
-    <div><b>${esc(r.t)}</b>
-      <p class="note">持有 ${bt?.h ?? (r.h === "long" ? 60 : 20)} 個交易日（約 ${r.h === "long" ? "3 個月" : "1 個月"}）。上方切換「短線 / 長線」可換規則。
-      </p></div>
-    <p>精選：符合條件的股票中，<b>外資 20 日買超比例最高的前 ${r.n} 檔</b>，等權重買進、持有到期再重選。
-      <button class="ghost sm" id="pickAllBtn">${state.pickAll ? "只看精選 " + r.n + " 檔" : "顯示全部候補"}</button></p>
-    <div class="market">${st(bt?.top_train, `精選 ${r.n} 檔：訓練期勝率`)}${st(bt?.top_test, `精選 ${r.n} 檔：驗證期勝率`)}${st(bt?.top_all, `精選 ${r.n} 檔：全期勝率`)}</div>
-    <p class="note">回測期間 2024/10 起、每週一次，只用當時已公布的資料；勝率是過去統計，不保證未來。只買 ${r.n} 檔波動很大，請看「最差一期」評估自己承受得了。</p></div>`;
+    <div><b>${esc(r.t)}</b>　<span class="note">上方切換「短線 / 長線」可換策略</span></div>
+    <h3 style="margin:12px 0 4px">操作 SOP（自己用任何看盤軟體也能照做）</h3>
+    <ol class="sop">${steps.map((x) => `<li>${x}</li>`).join("")}</ol>
+    <div class="cols2">
+      <div><h3 style="margin:12px 0 4px">回測（${isL ? "持有 60 日" : "持有 20 日"}）</h3>
+        <table class="kv"><tr><td></td><td>訓練期</td><td>驗證期</td></tr>
+          ${row("候選股個股勝率（贏過大盤中位數）", bt?.train, bt?.test, "win")}
+          ${row(`自己從候選隨便挑 ${r.n} 檔：組合贏過大盤`, bt?.rand_train, bt?.rand_test, "basket_win")}
+          ${row(`自己從候選隨便挑 ${r.n} 檔：組合賺錢`, bt?.rand_train, bt?.rand_test, "basket_pos")}
+          ${row(`照「外資優先」挑 ${r.n} 檔：個股勝率`, bt?.top_train, bt?.top_test, "win")}
+          ${row(`照「外資優先」挑 ${r.n} 檔：組合賺錢`, bt?.top_train, bt?.top_test, "basket_pos")}
+          <tr><td>最差一期（外資優先 ${r.n} 檔）</td><td>${bt?.top_train ? signed(bt.top_train.worst, 1) : "—"}</td><td>${bt?.top_test ? signed(bt.top_test.worst, 1) : "—"}</td></tr>
+        </table></div>
+      <div><h3 style="margin:12px 0 4px">今天的候選</h3>
+        <p>符合條件 <b>${state.data.stocks.filter((s) => (s.m.rules || []).includes(id)).length}</b> 檔。下表${state.pickAll ? "是全部候選" : `是外資優先的前 ${r.n} 檔`}。
+        <button class="ghost sm" id="pickAllBtn">${state.pickAll ? "只看前 " + r.n + " 檔" : "顯示全部候選"}</button></p>
+        <p class="note">回測期間 2024/10~2026/10、每週一次，只用當時已公布的資料。這段期間是 AI 多頭，風格轉換時勝率可能下降。止損規則沒有回測過，未納入。</p></div>
+    </div></div>`;
   $("#pickAllBtn").onclick = () => { state.pickAll = !state.pickAll; render(); };
 }
 

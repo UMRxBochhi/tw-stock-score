@@ -44,8 +44,8 @@ STRATS = {
 }
 # 策略選股規則（回測驗證期勝率見網頁「策略選股」）
 RULES = {
-    "long_core": {"h": "long", "n": 5, "t": "長線核心：營收連續年增 ≥ 12 個月＋成交金額前 30%＋近 3 月營收成長前 50%＋排除乖離過大"},
-    "short_core": {"h": "short", "n": 3, "t": "短線回檔買：營收連續年增 ≥ 12 個月＋營收動能 > 0＋成交金額前 30%＋股價在 20 日線下"},
+    "long_core": {"h": "long", "n": 5, "t": "長線：營收連續年增 ≥ 12 個月＋20 日均成交金額 ≥ 10 億＋不過熱"},
+    "short_core": {"h": "short", "n": 3, "t": "短線：營收連續年增 ≥ 12 個月＋營收動能 > 0＋20 日均成交金額 ≥ 10 億＋股價在 20 日線下＋不過熱"},
 }
 # 精選：符合規則的股票中，外資 20 日買超比例最高的前 N 檔（回測中排序方式以訓練期表現選出）
 
@@ -63,13 +63,14 @@ def is_over(m: dict) -> bool:
     return (m.get("b20") or 0) > OVER_B20 or (m.get("b60") or 0) > OVER_B60
 
 
-def rule_hits(m: dict, liq_pct, rev3_pct):
-    """liq_pct、rev3_pct：0~1 的百分位（在評分股票中）"""
+RULE_MIN_VALUE = 1e9   # 20 日均成交金額 10 億
+
+
+def rule_hits(m: dict, liq_pct=None, rev3_pct=None):
+    """固定門檻，使用者自己用看盤軟體也能照做。m 需要 streak、accel、b20、b60、avgval"""
     hits = []
-    streak = m.get("streak") or 0
-    if streak >= 12 and liq_pct is not None and liq_pct >= 0.7 and not is_over(m):
-        if rev3_pct is not None and rev3_pct >= 0.5:
-            hits.append("long_core")
+    if (m.get("streak") or 0) >= 12 and (m.get("avgval") or 0) >= RULE_MIN_VALUE and not is_over(m):
+        hits.append("long_core")
         if (m.get("accel") or -1) > 0 and m.get("b20") is not None and m["b20"] < 0:
             hits.append("short_core")
     return hits
