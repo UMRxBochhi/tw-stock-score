@@ -37,7 +37,7 @@ MKT = {}   # 每個評估日的大盤狀態（0050）：{日期: {"up60": bool, 
 def nw_t(xs, lag):
     """Newey-West t 值：持有期重疊（每週評估、持有 20/60 日），相鄰期 IC 互相相關，一般 t 值會高估"""
     n = len(xs)
-    if n < 10:
+    if n < max(10, 3 * lag):     # 樣本太少時 Newey-West 不可靠（例如空頭期間只有十幾期）
         return None
     mu = sum(xs) / n
     e = [x - mu for x in xs]
