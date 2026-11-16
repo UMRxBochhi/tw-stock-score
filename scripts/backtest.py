@@ -158,6 +158,9 @@ def build_records():
             m["avgval"] = avg_val
             m["r20"] = (p / closes[-21] - 1) * 100
             m["r60"] = (p / closes[-61] - 1) * 100 if len(closes) > 60 else None
+            rets = [closes[i] / closes[i - 1] - 1 for i in range(len(closes) - 60, len(closes))]
+            mu = sum(rets) / len(rets)
+            m["lowvol"] = -math.sqrt(sum((x - mu) ** 2 for x in rets) / len(rets)) * 100   # 低波動（候選防禦指標）
             lv = u.support_levels(ser)
             m["sup_score"] = lv.get("sup_score")
             if len(tds) >= 10:
@@ -242,7 +245,7 @@ def main():
               "strats": {}, "ic": {}}
 
     comps = ["fund", "liq", "peg", "chip", "tech", "value", "sup"]
-    raw = ["qf", "streak", "rev_hi", "rev3", "cum_yoy", "accel", "f20", "t20", "b20", "b60", "vr", "lv", "sup_score", "val_cheap"]
+    raw = ["qf", "streak", "rev_hi", "rev3", "cum_yoy", "accel", "f20", "t20", "b20", "b60", "r60", "vr", "lv", "lowvol", "sup_score", "val_cheap"]
 
     def ic_table(name, recs):
         out = {}
@@ -300,6 +303,11 @@ def main():
         ic_all = ic_table(name, recs)
         ic_train = ic_table(name, train)
         report["ic"][name] = {"all": ic_all, "train": ic_train, "test": ic_table(name, test)}
+        # 多頭 / 空頭（進場時 0050 在半年線上 / 下）分開看各指標預測力 → 判斷是否值得依行情切換策略
+        report.setdefault("ic_regime", {})[name] = {
+            lab: ic_table(name, part) if len(part) >= 10 else {}
+            for lab, part in (("bull", [r for r in recs if MKT.get(r[0], {}).get("up120") is True]),
+                              ("bear", [r for r in recs if MKT.get(r[0], {}).get("up120") is False]))}
         cur = u.SCORE_W
         # 校正：訓練期 IC > 0 的面向依 IC 分配權重，與目前權重各半（避免過度擬合）
         pos = {k: max(0.0, ic_train.get(k, {}).get("ic", 0.0)) for k in comps}
