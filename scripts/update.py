@@ -315,7 +315,8 @@ TPEX = "https://www.tpex.org.tw/www/zh-tw"
 TPEX_SLEEP = 2.5
 MAX_TPEX_CALLS = int(os.environ.get("MAX_TPEX_CALLS", "250"))
 tpex_calls = 0
-OTC_CODES: set = set()          # 上櫃代號（main 從 meta 載入，抓到上櫃行情時更新）
+OTC_CODES: set = set()          # 曾經出現在上櫃行情的代號（判斷某天資料是否已含上櫃用）
+OTC_LATEST = {"d": "", "codes": []}   # 最新一天的上櫃代號（標示「櫃」用；轉上市的股票不會誤標）
 ETF_RE = re.compile(r"00\d{2,4}[A-Z]?")
 
 
@@ -412,6 +413,8 @@ def merge_otc(store: dict, fetcher, label: str, nodata: set, names: dict | None 
                 res, nm = res
                 names.update(nm)
             store[k].update(res)
+            if names is not None and k > OTC_LATEST["d"]:
+                OTC_LATEST.update(d=k, codes=sorted(res))
             n += 1
             log(f"  上櫃 {label} {k} ok ({len(res)})")
         elif st == "nodata" and k < today:
@@ -479,8 +482,6 @@ def fetch_mops_revenue(roc_y: int, m: int, mk: str = "sii"):
         if len(tds) >= 7 and re.fullmatch(r"\d{4}", tds[0]):
             out[tds[0]] = [num(tds[2]), num(tds[6])]
     probe["calls"].setdefault("mops_" + mk, {"ok": bool(out), "n": len(out), "url": url})
-    if mk == "otc":
-        OTC_CODES.update(out)
     return out
 
 
@@ -868,6 +869,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
 
     metrics = {}
     vp_cache = {}
+    otc_now = set(OTC_LATEST["codes"]) or OTC_CODES
     for code, row in prices[last].items():
         close = row[0]
         if not is_stock(code):
@@ -958,7 +960,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
         closes = [x[0] for x in ser]
         if len(closes) < 2:
             continue
-        e = {"c": code, "n": names.get(code, ""), "p": closes[-1], "mk": "o" if code in OTC_CODES else "t",
+        e = {"c": code, "n": names.get(code, ""), "p": closes[-1], "mk": "o" if code in otc_now else "t",
              "chg": round((closes[-1] / closes[-2] - 1) * 100, 2),
              "avgval": round(sum(x[2] for x in ser[-20:]) / len(ser[-20:]))}
         if len(closes) >= 21:
@@ -1006,7 +1008,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
             for name, wts in STRATS.items():
                 sc[name] = strat_score(sc, m, wts)
             m["pct"] = {k: round(ranks[k][code] * 100) for k in keys if code in ranks[k]}
-        stocks.append({"c": code, "n": names.get(code, ""), "ind": industry(code, rev), "mk": "o" if code in OTC_CODES else "t",
+        stocks.append({"c": code, "n": names.get(code, ""), "ind": industry(code, rev), "mk": "o" if code in otc_now else "t",
                        "s": sc, "m": m})
     stocks.sort(key=lambda x: (x["s"].get("long") is None, -(x["s"].get("long") or 0)))
 
@@ -1154,6 +1156,7 @@ def main():
     bw_latest = load("bwibbu_latest.json", {})
     meta = load("meta.json", {"nodata_prices": [], "nodata_t86": []})
     OTC_CODES.update(meta.get("otc_codes", []))
+    OTC_LATEST.update(meta.get("otc_latest") or {})
     otc_nd = {k: set(meta.get("nodata_otc_" + k, [])) for k in ("px", "t86", "pe")}
     fund = load("fundamentals.json", {})
     index = load("index.json", {})
@@ -1197,6 +1200,7 @@ def main():
             del h[k]
 
     meta["otc_codes"] = sorted(OTC_CODES)
+    meta["otc_latest"] = OTC_LATEST
     cut = ymd(datetime.now(TW).date() - timedelta(days=400))
     for k, v in otc_nd.items():   # 日資料只留近期；月取樣（pe）全留，避免每天重試很舊的月份
         meta["nodata_otc_" + k] = sorted(x for x in v if k == "pe" or x >= cut)
