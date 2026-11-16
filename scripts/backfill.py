@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 os.environ.setdefault("MAX_RWD_CALLS", "3000")
+os.environ.setdefault("MAX_TPEX_CALLS", "3000")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import update as u  # noqa: E402
 
@@ -67,25 +68,48 @@ def backfill_daily(prefix, fetcher, nodata):
         d += timedelta(days=1)
 
 
+def backfill_otc(prefix, fetcher, nodata):
+    """已有上市資料的日期，補上同一天的上櫃資料"""
+    today = datetime.now(u.TW).date()
+    d = START
+    while d < today and not out_of_time():
+        k = u.ymd(d)
+        if d.weekday() < 5 and k not in nodata:
+            rows = load_month(prefix, k[:6])
+            if k in rows and not u.has_otc(rows[k]):
+                res, st = fetcher(d)
+                if st == "ok":
+                    rows[k].update(res[0] if prefix == "px" else res)
+                    save_month(prefix, k[:6], rows)
+                    u.log(f"  上櫃 {prefix} {k} ok")
+                elif st == "nodata":
+                    nodata.add(k)
+                else:
+                    u.log(f"  上櫃 {prefix} {k} error，暫停 60 秒")
+                    time.sleep(60)
+        d += timedelta(days=1)
+
+
 def backfill_revenue():
     p = HIST / "rev.json"
     rev = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-    have = {k for h in rev.values() for k in h}
     today = datetime.now(u.TW).date()
-    y, m = REV_START
-    while (y, m) < (today.year, today.month) and not out_of_time():
-        key = f"{y - 1911}{m:02d}"
-        last_month = (y, m) == ((today.replace(day=1) - timedelta(days=1)).year,
-                                (today.replace(day=1) - timedelta(days=1)).month)
-        if key not in have and not (last_month and today.day < 12):
-            res = u.fetch_mops_revenue(y - 1911, m)
-            if res:
-                for code, v in res.items():
-                    rev.setdefault(code, {})[key] = v
-                u.log(f"  rev {key} ok ({len(res)})")
-        m += 1
-        if m > 12:
-            y, m = y + 1, 1
+    for mk in ("sii", "otc"):
+        have = u.rev_months_have(rev, mk)
+        y, m = REV_START
+        while (y, m) < (today.year, today.month) and not out_of_time():
+            key = f"{y - 1911}{m:02d}"
+            last_month = (y, m) == ((today.replace(day=1) - timedelta(days=1)).year,
+                                    (today.replace(day=1) - timedelta(days=1)).month)
+            if key not in have and not (last_month and today.day < 12):
+                res = u.fetch_mops_revenue(y - 1911, m, mk)
+                if res:
+                    for code, v in res.items():
+                        rev.setdefault(code, {})[key] = v
+                    u.log(f"  rev {mk} {key} ok ({len(res)})")
+            m += 1
+            if m > 12:
+                y, m = y + 1, 1
     HIST.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(rev, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
@@ -93,19 +117,32 @@ def backfill_revenue():
 def main():
     nd_path = HIST / "nodata.json"
     nodata = set(json.loads(nd_path.read_text())) if nd_path.exists() else set()
-    u.log("== 月營收")
-    backfill_revenue()
-    u.log("== 本益比月取樣（7 年）")
-    pe = u.load("pe_monthly.json", {})
-    u.update_pe_monthly(pe)
-    u.save("pe_monthly.json", pe)
+    meta = u.load("meta.json", {})
+    u.OTC_CODES.update(meta.get("otc_codes", []))
+    ndo_path = HIST / "nodata_otc.json"
+    ndo = json.loads(ndo_path.read_text()) if ndo_path.exists() else {}
+    ndo = {k: set(ndo.get(k, [])) for k in ("px", "t86", "pe")}
     u.log("== 收盤行情")
     backfill_daily("px", u.fetch_prices, nodata)
+    u.log("== 上櫃收盤行情")
+    backfill_otc("px", u.fetch_prices_otc, ndo["px"])
+    u.log("== 月營收（上市、上櫃）")
+    backfill_revenue()
+    u.log("== 本益比月取樣（7 年，上市＋上櫃）")
+    pe = u.load("pe_monthly.json", {})
+    u.update_pe_monthly(pe, ndo["pe"])
+    u.save("pe_monthly.json", pe)
     u.log("== 三大法人")
     backfill_daily("t86", u.fetch_t86, nodata)
+    u.log("== 上櫃三大法人")
+    backfill_otc("t86", u.fetch_t86_otc, ndo["t86"])
     HIST.mkdir(parents=True, exist_ok=True)
     nd_path.write_text(json.dumps(sorted(nodata)))
-    u.save("probe_backfill.json", {"rwd_calls": u.rwd_calls, "errors": u.probe["errors"][-20:],
+    ndo_path.write_text(json.dumps({k: sorted(v) for k, v in ndo.items()}))
+    meta = u.load("meta.json", {})
+    meta["otc_codes"] = sorted(set(meta.get("otc_codes", [])) | u.OTC_CODES)
+    u.save("meta.json", meta)
+    u.save("probe_backfill.json", {"rwd_calls": u.rwd_calls, "tpex_calls": u.tpex_calls, "errors": u.probe["errors"][-20:],
                                    "minutes": round((time.time() - T0) / 60, 1),
                                    "finished_all": not out_of_time()})
     u.log(f"完成，用了 {u.rwd_calls} 次請求、{(time.time() - T0) / 60:.1f} 分鐘")

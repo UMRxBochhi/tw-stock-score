@@ -169,7 +169,7 @@ def record_probe(key, js):
         if t:
             info["fields"] = t[0]
             info["sample"] = t[1][:2]
-            info["ok"] = js.get("stat") == "OK"
+            info["ok"] = str(js.get("stat")).upper() == "OK"
     elif isinstance(js, list):
         info["len"] = len(js)
         info["sample"] = js[:2]
@@ -310,6 +310,117 @@ def fetch_bwibbu(d: date):
     return out, "ok"
 
 
+# ---------------------------------------------------------------- 上櫃（櫃買中心）
+TPEX = "https://www.tpex.org.tw/www/zh-tw"
+TPEX_SLEEP = 2.5
+MAX_TPEX_CALLS = int(os.environ.get("MAX_TPEX_CALLS", "250"))
+tpex_calls = 0
+OTC_CODES: set = set()          # 上櫃代號（main 從 meta 載入，抓到上櫃行情時更新）
+ETF_RE = re.compile(r"00\d{2,4}[A-Z]?")
+
+
+def has_otc(rows) -> bool:
+    """這一天（或這個月取樣）的資料是否已含上櫃"""
+    return bool(OTC_CODES) and len(OTC_CODES & set(rows)) >= 50
+
+
+def tpex_json(path, d: date, **params):
+    global tpex_calls
+    if tpex_calls >= MAX_TPEX_CALLS:
+        return None
+    tpex_calls += 1
+    time.sleep(TPEX_SLEEP)
+    return get_json(f"{TPEX}/{path}", {**params, "date": d.strftime("%Y/%m/%d"), "response": "json"})
+
+
+def fetch_prices_otc(d: date):
+    js = tpex_json("afterTrading/dailyQuotes", d, type="EW")
+    if js is None:
+        return None, "error"
+    record_probe("tpex_quotes", js)
+    t = find_table(js, ["代號", "收盤"])
+    if not t:
+        return None, "nodata"
+    f, rows = t
+    ic, inm, icl = col(f, "代號"), col(f, "名稱"), col(f, "收盤")
+    ish, iv, ihi, ilo = col(f, "成交股數"), col(f, "成交金額"), col(f, "最高"), col(f, "最低")
+    out, names = {}, {}
+    for r in rows:
+        code = str(r[ic]).strip()
+        if not (is_stock(code) or ETF_RE.fullmatch(code)):
+            continue
+        close = num(r[icl])
+        if close is None:
+            continue
+        hi = num(r[ihi]) if ihi is not None else None
+        lo = num(r[ilo]) if ilo is not None else None
+        out[code] = [close, num(r[ish]) or 0, num(r[iv]) or 0, hi or close, lo or close]
+        names[code] = str(r[inm]).strip()
+    if len(out) < 100:
+        return None, "nodata"
+    OTC_CODES.update(out)
+    return (out, names), "ok"
+
+
+def fetch_t86_otc(d: date):
+    """欄位：外資(不含外資自營商) 買/賣/超 = 2~4、外資自營商 5~7、外資合計 8~10、投信 11~13、
+    自營商自行 14~16、自營商避險 17~19、自營商合計 20~22、三大法人合計 23"""
+    js = tpex_json("insti/dailyTrade", d, type="Daily", sect="EW")
+    if js is None:
+        return None, "error"
+    record_probe("tpex_insti", js)
+    t = find_table(js, ["代號", "買賣超股數"])
+    if not t:
+        return None, "nodata"
+    f, rows = t
+    if len(f) < 24:
+        probe["errors"].append(f"tpex insti 欄位數 {len(f)}")
+        return None, "error"
+    out = {}
+    for r in rows:
+        out[str(r[0]).strip()] = [num(r[4]) or 0, num(r[13]) or 0, num(r[22]) or 0]
+    return (out if len(out) >= 100 else None), ("ok" if len(out) >= 100 else "nodata")
+
+
+def fetch_bwibbu_otc(d: date):
+    js = tpex_json("afterTrading/peQryDate", d)
+    if js is None:
+        return None, "error"
+    record_probe("tpex_pe", js)
+    t = find_table(js, ["股票代號", "本益比"])
+    if not t:
+        return None, "nodata"
+    f, rows = t
+    ic, ipe, iy, ipb = col(f, "股票代號"), col(f, "本益比"), col(f, "殖利率"), col(f, "股價淨值比")
+    out = {}
+    for r in rows:
+        out[str(r[ic]).strip()] = [num(r[ipe]), num(r[iy]) if iy is not None else None,
+                                   num(r[ipb]) if ipb is not None else None, None]
+    return (out if len(out) >= 100 else None), ("ok" if len(out) >= 100 else "nodata")
+
+
+def merge_otc(store: dict, fetcher, label: str, nodata: set, names: dict | None = None):
+    """已有上市資料的日期，補上同一天的上櫃資料（新的日期優先）"""
+    today = ymd(datetime.now(TW).date())
+    n = 0
+    for k in sorted(store, reverse=True):
+        if k in nodata or has_otc(store[k]):
+            continue
+        res, st = fetcher(datetime.strptime(k, "%Y%m%d").date())
+        if st == "ok":
+            if names is not None:
+                res, nm = res
+                names.update(nm)
+            store[k].update(res)
+            n += 1
+            log(f"  上櫃 {label} {k} ok ({len(res)})")
+        elif st == "nodata" and k < today:
+            nodata.add(k)
+        elif st == "error":
+            break
+    return n
+
+
 def roc_to_ymd(s):
     y, m, d = str(s).strip().split("/")
     return f"{int(y) + 1911}{int(m):02d}{int(d):02d}"
@@ -342,12 +453,12 @@ def update_index(idx: dict):
         del idx[k]
 
 
-def fetch_mops_revenue(roc_y: int, m: int):
-    """公開資訊觀測站：上市公司某月營收彙總（一次一個月、全部公司）"""
+def fetch_mops_revenue(roc_y: int, m: int, mk: str = "sii"):
+    """公開資訊觀測站：某月營收彙總（一次一個月、全部公司）。mk = sii 上市 / otc 上櫃"""
     html = None
     for host in ("mopsov.twse.com.tw", "mops.twse.com.tw"):  # 觀測站改版後舊頁面搬到 mopsov
         for suffix in ("_0.html", ".html"):
-            url = f"https://{host}/nas/t21/sii/t21sc03_{roc_y}_{m}{suffix}"
+            url = f"https://{host}/nas/t21/{mk}/t21sc03_{roc_y}_{m}{suffix}"
             try:
                 time.sleep(2)
                 r = S.get(url, timeout=40)
@@ -367,33 +478,46 @@ def fetch_mops_revenue(roc_y: int, m: int):
                for x in re.findall(r"<td[^>]*>(.*?)</td>", tr, flags=re.S | re.I)]
         if len(tds) >= 7 and re.fullmatch(r"\d{4}", tds[0]):
             out[tds[0]] = [num(tds[2]), num(tds[6])]
-    probe["calls"].setdefault("mops", {"ok": bool(out), "n": len(out), "url": url})
+    probe["calls"].setdefault("mops_" + mk, {"ok": bool(out), "n": len(out), "url": url})
+    if mk == "otc":
+        OTC_CODES.update(out)
     return out
+
+
+def rev_months_have(hist: dict, mk: str):
+    """某市場已經有哪些月份的營收（同一個月至少 50 家才算有）"""
+    cnt = {}
+    for code, h in hist.items():
+        if (code in OTC_CODES) == (mk == "otc"):
+            for k in h:
+                cnt[k] = cnt.get(k, 0) + 1
+    return {k for k, n in cnt.items() if n >= 50}
 
 
 def backfill_revenue(fund: dict):
     hist = fund.setdefault("rev_hist", {})
-    have = {k for h in hist.values() for k in h}
     today = datetime.now(TW).date()
-    fails = 0
-    for i in range(1, REV_MONTHS + 2):
-        yy, mm = today.year, today.month - i
-        while mm <= 0:
-            yy, mm = yy - 1, mm + 12
-        key = f"{yy - 1911}{mm:02d}"
-        if key in have:
-            continue
-        if i == 1 and today.day < 12:  # 上個月營收 10 號前才陸續公布
-            continue
-        res = fetch_mops_revenue(yy - 1911, mm)
-        if not res:
-            fails += 1
-            if fails >= 2:
-                return
-            continue
-        for code, v in res.items():
-            hist.setdefault(code, {})[key] = v
-        log(f"  月營收 {key} ok ({len(res)})")
+    for mk in ("sii", "otc"):
+        have = rev_months_have(hist, mk)
+        fails = 0
+        for i in range(1, REV_MONTHS + 2):
+            yy, mm = today.year, today.month - i
+            while mm <= 0:
+                yy, mm = yy - 1, mm + 12
+            key = f"{yy - 1911}{mm:02d}"
+            if key in have:
+                continue
+            if i == 1 and today.day < 12:  # 上個月營收 10 號前才陸續公布
+                continue
+            res = fetch_mops_revenue(yy - 1911, mm, mk)
+            if not res:
+                fails += 1
+                if fails >= 2:
+                    break
+                continue
+            for code, v in res.items():
+                hist.setdefault(code, {})[key] = v
+            log(f"  月營收 {mk} {key} ok ({len(res)})")
 
 
 def revenue_metrics(h: dict):
@@ -454,14 +578,26 @@ def pick(rec: dict, *keys, exclude=()):
     return None
 
 
+def fund_rows(kind: str, suf: str = ""):
+    """上市（證交所 OpenAPI）＋上櫃（櫃買 OpenAPI）合併"""
+    tw = {"rev": "opendata/t187ap05_L", "inc": f"opendata/t187ap06_L_{suf}", "bal": f"opendata/t187ap07_L_{suf}"}[kind]
+    tp = {"rev": "mopsfin_t187ap05_O", "inc": f"mopsfin_t187ap06_O_{suf}", "bal": f"mopsfin_t187ap07_O_{suf}"}[kind]
+    rows = list(openapi(tw) or [])
+    js = get_json("https://www.tpex.org.tw/openapi/v1/" + tp, tries=1)
+    if isinstance(js, list):
+        record_probe("tpex:" + tp, js)
+        rows += js
+    return rows
+
+
 def fetch_fundamentals(old):
     fund = dict(old) if old else {}
     # 月營收
-    rev = openapi("opendata/t187ap05_L")
+    rev = fund_rows("rev")
     if rev:
         m = {}
         for r in rev:
-            code = str(pick(r, "公司代號") or "").strip()
+            code = str(pick(r, "公司代號", "SecuritiesCompanyCode") or "").strip()
             if not code:
                 continue
             m[code] = {
@@ -472,7 +608,7 @@ def fetch_fundamentals(old):
                 "rev_mom": num(pick(r, "上月比較增減")),
                 "cum_yoy": num(pick(r, "前期比較增減")),
             }
-        fund["revenue"] = m
+        fund["revenue"] = {**fund.get("revenue", {}), **m}
         hist = fund.setdefault("rev_hist", {})
         for code, r in m.items():
             if r["ym"] and r["rev"] is not None:
@@ -480,15 +616,15 @@ def fetch_fundamentals(old):
     # 綜合損益表（各產業別格式）
     inc = {}
     for suf in ["ci", "basi", "bd", "fh", "ins", "mim"]:
-        rows = openapi(f"opendata/t187ap06_L_{suf}")
+        rows = fund_rows("inc", suf)
         for r in rows or []:
-            code = str(pick(r, "公司代號") or "").strip()
+            code = str(pick(r, "公司代號", "SecuritiesCompanyCode") or "").strip()
             if not code:
                 continue
             revenue = num(pick(r, "營業收入", exclude=("營業收入淨額以外",)))
             gross = num(pick(r, "營業毛利（毛損）淨額", "營業毛利（毛損）", "營業毛利"))
             inc[code] = {
-                "y": pick(r, "年度"), "q": num(pick(r, "季別")),
+                "y": pick(r, "年度", "Year"), "q": num(pick(r, "季別", "Season")),
                 "eps": num(pick(r, "基本每股盈餘")),
                 "ni": num(pick(r, "淨利（淨損）歸屬於母公司業主", "歸屬於母公司業主")),
                 "gm": round(gross / revenue * 100, 2) if gross is not None and revenue else None,
@@ -499,9 +635,9 @@ def fetch_fundamentals(old):
     # 資產負債表（算 ROE 用）
     eq = {}
     for suf in ["ci", "basi", "bd", "fh", "ins", "mim"]:
-        rows = openapi(f"opendata/t187ap07_L_{suf}")
+        rows = fund_rows("bal", suf)
         for r in rows or []:
-            code = str(pick(r, "公司代號") or "").strip()
+            code = str(pick(r, "公司代號", "SecuritiesCompanyCode") or "").strip()
             v = num(pick(r, "歸屬於母公司業主之權益合計", "權益總額", "權益合計"))
             if code and v:
                 eq[code] = v
@@ -543,7 +679,7 @@ def update_daily(store: dict, nodata: list, fetcher, keep: int, window_days: int
     return sorted(x for x in nd if x >= cutoff), fetched
 
 
-def update_pe_monthly(pe: dict):
+def update_pe_monthly(pe: dict, otc_nd: set | None = None):
     # 舊版只存本益比數字，換成 [本益比, 收盤價] 格式需重抓
     if any(not isinstance(v, list) for mon in pe.values() for v in list(mon.values())[:1]):
         pe.clear()
@@ -575,6 +711,33 @@ def update_pe_monthly(pe: dict):
                 break
             if st == "error":
                 return
+    # 上櫃：同一個月另外取樣一次，合併進去
+    otc_nd = otc_nd if otc_nd is not None else set()
+    for (y, m) in months:
+        key = f"{y}{m:02d}"
+        if key not in pe or key in otc_nd or has_otc(pe[key]):
+            continue
+        st = "nodata"
+        for day in (15, 16, 17, 18, 14, 13, 19, 20, 21, 22, 23, 24, 25, 26, 12, 11, 10):
+            d = date(y, m, day)
+            if d.weekday() >= 5:
+                continue
+            res, st = fetch_bwibbu_otc(d)
+            if st == "ok":
+                pr, st2 = fetch_prices_otc(d)
+                if st2 != "ok":
+                    st = st2
+                    break
+                closes = {c: v[0] for c, v in pr[0].items()}
+                pe[key].update({c: [v[0], closes.get(c)] for c, v in res.items() if v[0]})
+                log(f"  上櫃 PE {key} ok ({len(res)})")
+                break
+            if st == "error":
+                break
+        if st == "error":
+            break
+        if st == "nodata":
+            otc_nd.add(key)
     keep = {f"{y}{m:02d}" for (y, m) in months}
     for k in list(pe):
         if k not in keep:
@@ -795,7 +958,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
         closes = [x[0] for x in ser]
         if len(closes) < 2:
             continue
-        e = {"c": code, "n": names.get(code, ""), "p": closes[-1],
+        e = {"c": code, "n": names.get(code, ""), "p": closes[-1], "mk": "o" if code in OTC_CODES else "t",
              "chg": round((closes[-1] / closes[-2] - 1) * 100, 2),
              "avgval": round(sum(x[2] for x in ser[-20:]) / len(ser[-20:]))}
         if len(closes) >= 21:
@@ -843,7 +1006,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
             for name, wts in STRATS.items():
                 sc[name] = strat_score(sc, m, wts)
             m["pct"] = {k: round(ranks[k][code] * 100) for k in keys if code in ranks[k]}
-        stocks.append({"c": code, "n": names.get(code, ""), "ind": industry(code, rev),
+        stocks.append({"c": code, "n": names.get(code, ""), "ind": industry(code, rev), "mk": "o" if code in OTC_CODES else "t",
                        "s": sc, "m": m})
     stocks.sort(key=lambda x: (x["s"].get("long") is None, -(x["s"].get("long") or 0)))
 
@@ -975,7 +1138,8 @@ def sync_hist(prices, t86):
         for ym, days in by_month.items():
             p = hist / f"{prefix}_{ym}.json"
             cur = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-            new = {d: r for d, r in days.items() if d not in cur and (prefix != "px" or len(next(iter(r.values()))) >= 5)}
+            new = {d: r for d, r in days.items() if (d not in cur or len(r) > len(cur[d]))
+                   and (prefix != "px" or len(next(iter(r.values()))) >= 5)}
             if new:
                 cur.update(new)
                 p.write_text(json.dumps(cur, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
@@ -989,6 +1153,8 @@ def main():
     pe_monthly = load("pe_monthly.json", {})
     bw_latest = load("bwibbu_latest.json", {})
     meta = load("meta.json", {"nodata_prices": [], "nodata_t86": []})
+    OTC_CODES.update(meta.get("otc_codes", []))
+    otc_nd = {k: set(meta.get("nodata_otc_" + k, [])) for k in ("px", "t86", "pe")}
     fund = load("fundamentals.json", {})
     index = load("index.json", {})
     scores = load("scores.json", {})
@@ -998,6 +1164,9 @@ def main():
                                              PRICE_KEEP, 200, "price", names)
     log("== 三大法人")
     meta["nodata_t86"], n2 = update_daily(t86, meta["nodata_t86"], fetch_t86, T86_KEEP, 40, "t86")
+    log("== 上櫃收盤行情、三大法人")
+    merge_otc(prices, fetch_prices_otc, "price", otc_nd["px"], names)
+    merge_otc(t86, fetch_t86_otc, "t86", otc_nd["t86"])
     log("== 本益比/殖利率（最新）")
     if prices:
         last = max(prices)
@@ -1010,8 +1179,13 @@ def main():
                 bw_latest = {"date": k, "data": res}
                 log(f"  本益比 {k} ok ({len(res)})")
                 break
+    if bw_latest.get("date") and not has_otc(bw_latest.get("data", {})):
+        res, st = fetch_bwibbu_otc(datetime.strptime(bw_latest["date"], "%Y%m%d").date())
+        if st == "ok":
+            bw_latest["data"].update(res)
+            log(f"  上櫃本益比 {bw_latest['date']} ok ({len(res)})")
     log("== 本益比月取樣（位階用）")
-    update_pe_monthly(pe_monthly)
+    update_pe_monthly(pe_monthly, otc_nd["pe"])
     log("== 加權指數")
     update_index(index)
     log("== 月營收 / 財報")
@@ -1022,6 +1196,10 @@ def main():
         for k in sorted(h)[:-REV_MONTHS]:
             del h[k]
 
+    meta["otc_codes"] = sorted(OTC_CODES)
+    cut = ymd(datetime.now(TW).date() - timedelta(days=400))
+    for k, v in otc_nd.items():   # 日資料只留近期；月取樣（pe）全留，避免每天重試很舊的月份
+        meta["nodata_otc_" + k] = sorted(x for x in v if k == "pe" or x >= cut)
     sync_hist(prices, t86)
     save("prices.json", prices)
     save("names.json", names)
@@ -1036,6 +1214,7 @@ def main():
     save("scores.json", scores)
     save("fundamentals.json", fund)
     probe["rwd_calls"] = rwd_calls
+    probe["tpex_calls"] = tpex_calls
     probe["finished"] = datetime.now(TW).isoformat()
     probe["counts"] = {"price_days": len(prices), "t86_days": len(t86), "pe_months": len(pe_monthly),
                        "revenue": len(fund.get("revenue", {})), "income": len(fund.get("income", {})),

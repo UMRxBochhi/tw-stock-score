@@ -171,7 +171,7 @@ function renderTable() {
   const tb = shown.map((s, i) => `<tr data-c="${s.c}">
       <td class="starc"><button class="star ${state.watch.has(s.c) ? "on" : ""}" data-star="${s.c}" title="加入/移除自選">${state.watch.has(s.c) ? "★" : "☆"}</button></td>
       <td class="rank">${i + 1}</td>
-      <td class="l"><span class="code">${s.c}</span>${esc(s.n)}${flagHtml(s)}</td>
+      <td class="l"><span class="code">${s.c}</span>${esc(s.n)}${s.mk === "o" ? '<span class="mk" title="上櫃">櫃</span>' : ""}${flagHtml(s)}</td>
       <td class="l hide-sm"><span class="ind">${esc(s.ind || "")}</span></td>
       ${cols.map((k) => `<td class="${HIDE_SM.has(k) ? "hide-sm" : ""}">${cell(k, s)}</td>`).join("")}</tr>`).join("");
   let empty = "沒有符合條件的股票。";
@@ -226,7 +226,7 @@ function renderMarket() {
   }
   const tot = (m.up || 0) + (m.down || 0) + (m.flat || 0);
   if (tot) {
-    cards.push(`<div class="card"><div class="lbl">今日漲跌家數（上市股票）</div>
+    cards.push(`<div class="card"><div class="lbl">今日漲跌家數（上市櫃股票）</div>
       <div class="val"><span class="up">${m.up}</span> / <span class="down">${m.down}</span></div>
       <div class="breadth" title="上漲 ${m.up}、平盤 ${m.flat}、下跌 ${m.down}"><span class="b-up" style="width:${m.up / tot * 100}%"></span><span class="b-flat" style="width:${m.flat / tot * 100}%"></span><span class="b-down" style="width:${m.down / tot * 100}%"></span></div>
       <div class="note">上漲 ${m.up}・平盤 ${m.flat}・下跌 ${m.down}</div></div>`);
@@ -403,7 +403,7 @@ function renderETF() {
       <span class="seg" id="etfKind">${kinds.map((x) => `<button data-k="${x}" class="${etfState.kind === x ? "on" : ""}">${x || "全部"}</button>`).join("")}</span>
       <span class="count">共 ${list.length} 檔</span></div>
     <div class="tablebox"><table><thead><tr>${th("c", "ETF", "l")}${th("kind", "類型", "l hide-sm")}${th("p", "收盤")}${th("chg", "今日")}${th("r20", "20日")}${th("r60", "60日", "hide-sm")}${th("r120", "120日", "hide-sm")}${th("b60", "距季線", "hide-sm")}${th("avgval", "均量(億)")}${th("inst20", "法人20日", "hide-sm")}${th("yld", "殖利率", "hide-sm")}</tr></thead>
-    <tbody>${list.slice(0, 300).map((e) => `<tr><td class="l"><span class="code">${e.c}</span>${esc(e.n)}</td><td class="l hide-sm"><span class="ind">${e.kind}</span></td>
+    <tbody>${list.slice(0, 300).map((e) => `<tr><td class="l"><span class="code">${e.c}</span>${esc(e.n)}${e.mk === "o" ? '<span class="mk" title="上櫃">櫃</span>' : ""}</td><td class="l hide-sm"><span class="ind">${e.kind}</span></td>
       <td>${fmt(e.p)}</td><td>${signed(e.chg)}</td><td>${signed(e.r20, 1)}</td><td class="hide-sm">${signed(e.r60, 1)}</td><td class="hide-sm">${signed(e.r120, 1)}</td>
       <td class="hide-sm">${signed(e.b60, 1)}</td><td>${fmt(e.avgval / 1e8)}</td><td class="hide-sm">${signed(e.inst20)}</td><td class="hide-sm">${fmt(e.yld, 2, "%")}</td></tr>`).join("")}</tbody></table></div>
     <p class="note">ETF 沒有營收與本益比，不評分；依成交金額排序（流動性越好，買賣價差越小）。法人 20 日 = 三大法人 20 日買超 ÷ 成交量。殖利率有資料才顯示。</p>`;
@@ -469,7 +469,7 @@ function renderHow() {
        建材營造、金融保險業的營收與獲利關係不穩定，改用一般本益比位階。</p>
     <p>每一項指標（支撐位置除外）先在「列入評分的股票」裡排名，換成 0~100 的百分位（贏過多少比例的股票），再依權重加總。
        分數是<b>相對排名</b>：70 分代表綜合起來贏過約七成的股票，不是「70% 機率會漲」。</p>
-    <p>列入評分：一般上市股票（排除 ETF），且近 20 日平均成交金額 ≥ ${(state.data.min_avg_value / 1e8).toFixed(1)} 億。某項資料缺漏時，用其餘指標重新分配權重。</p>
+    <p>列入評分：一般上市、上櫃股票（排除 ETF，上櫃股名稱旁標「櫃」），且近 20 日平均成交金額 ≥ ${(state.data.min_avg_value / 1e8).toFixed(1)} 億。某項資料缺漏時，用其餘指標重新分配權重。</p>
     <h3>營收成長</h3><table>${list(w.fund)}</table>
     <p class="note"><b>營收動能</b> = 近 3 個月營收年增率 − 近 12 個月營收年增率。正值代表成長在加速，負值代表成長在放緩；
        ≤ −10 會標示「動能轉弱」，可視為營收預期可能下修的訊號。<br>
@@ -549,7 +549,7 @@ async function showDetail(code) {
     <div class="dhead">
       <div>
         <h2><span class="code">${s.c}</span>${esc(s.n)} <button class="star big ${state.watch.has(s.c) ? "on" : ""}" data-star="${s.c}">${state.watch.has(s.c) ? "★" : "☆"}</button></h2>
-        <div class="ind">${esc(s.ind || "")}${m.liquid ? "" : "　・成交量不足，不列入評分"}　<a href="https://tw.stock.yahoo.com/quote/${s.c}.TW" target="_blank" rel="noopener">Yahoo 股市 →</a></div>
+        <div class="ind">${esc(s.ind || "")}${m.liquid ? "" : "　・成交量不足，不列入評分"}　${s.mk === "o" ? "上櫃・" : "上市・"}<a href="https://tw.stock.yahoo.com/quote/${s.c}.${s.mk === "o" ? "TWO" : "TW"}" target="_blank" rel="noopener">Yahoo 股市 →</a></div>
       </div>
       <button class="ghost" id="closeDetail" title="關閉（Esc）">✕</button>
     </div>
