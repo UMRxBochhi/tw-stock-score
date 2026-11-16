@@ -40,7 +40,8 @@ const F = {
   sup: { t: "支撐位置（參考，不計分）", short: "支撐*", g: (s) => s.s.sup, kind: "bar", grp: "分數" },
   fund: { t: "營收成長分數", short: "營收", g: (s) => s.s.fund, kind: "bar", grp: "分數" },
   rev_hi: { t: "最新月營收距前 12 月最高 %（≥ 0 = 創新高）", short: "營收距高", g: (s) => s.m.rev_hi, kind: "signed1", grp: "營收" },
-  chip: { t: "外資分數", short: "外資", g: (s) => s.s.chip, kind: "bar", grp: "分數" },
+  chip: { t: "外資持股分數", short: "外資持股", g: (s) => s.s.chip, kind: "bar", grp: "分數" },
+  qf: { t: "外資持股比例 %", short: "外資持股%", g: (s) => s.m.qf, kind: "num1", suf: "%", grp: "籌碼" },
   tech: { t: "趨勢（參考，不計分）", short: "趨勢*", g: (s) => s.s.tech, kind: "bar", grp: "分數" },
   sup_dist: { t: "距前波支撐 %（負 = 已跌破）", short: "距支撐", g: (s) => s.m.sup_dist, kind: "signed1", grp: "支撐" },
   sup_broke: { t: "跌破前波低點（1 = 是、0 = 否）", short: "破底", g: (s) => s.m.sup_broke == null ? null : (s.m.sup_broke ? 1 : 0), kind: "num0", grp: "支撐" },
@@ -72,7 +73,7 @@ const F = {
   i5: { t: "法人 5 日買超 / 成交量 %", short: "法人5日", g: (s) => s.m.i5, kind: "signed", grp: "籌碼" },
 };
 const LABEL = { rev_yoy: "月營收年增率", accel: "營收動能", cum_yoy: "累計營收年增率", roe: "ROE（年化）", gm: "毛利率",
-  f20: "外資 20 日買超 / 成交量", t20: "投信 20 日買超 / 成交量", i5: "三大法人 5 日買超 / 成交量",
+  qf: "外資持股比例", f20: "外資 20 日買超 / 成交量", t20: "投信 20 日買超 / 成交量", i5: "三大法人 5 日買超 / 成交量",
   r20: "20 日漲跌幅", b60: "股價相對 60 日均線（季線）", streak: "營收連續年增月數", rev3: "近 3 月營收年增", rev_hi: "營收距 12 月新高", pe_cheap: "本益比位階（越低越好）", yld: "殖利率", pb_cheap: "股價淨值比（越低越好）", val_cheap: "河流圖位階（預估本益比優先；位階 30% = 70 分）" };
 
 function cell(key, s) {
@@ -277,7 +278,7 @@ function renderRuleInfo() {
     `<b>資金控管</b>：回測最差一期 5 檔組合約 ${bt?.top_test ? bt.top_test.worst.toFixed(0) : "−25"}%，投入金額要是你能承受短期跌這麼多的錢。`,
   ] : [
     "<b>篩選</b>：營收連續年增 ≥ 12 個月、營收動能 > 0（近 3 月年增高於近 12 月）、20 日均成交金額 ≥ 10 億、股價在 20 日線下（回檔中）、不過熱。",
-    "<b>挑選</b>：從候選中挑 3 檔，照外資 20 日買超比例由高到低取前 3 檔。",
+    "<b>挑選</b>：從候選中挑 3 檔，照外資持股比例由高到低取前 3 檔。",
     "<b>買進</b>：3 檔等金額。",
     "<b>持有</b>：約 1 個月（20 個交易日），到期賣出、重新篩選。",
     `<b>資金控管</b>：回測最差一期 3 檔組合約 ${bt?.top_test ? bt.top_test.worst.toFixed(0) : "−30"}%，短線波動比長線大，金額要更保守。`,
@@ -424,7 +425,7 @@ function renderETF() {
 function renderBacktest() {
   const bt = state.bt;
   if (!bt) { $("#page").innerHTML = '<div class="how"><p>回測結果還沒產生（需要先補完歷史資料）。</p></div>'; return; }
-  const NAMES = { fund: "營收成長分數（計分）", liq: "流動性分數（計分）", peg: "成長性價比 PEG（計分）", chip: "外資分數（計分）", rev_hi: "營收距 12 月新高", tech: "趨勢（參考）", value: "估值（參考）", sup: "支撐位置（參考）",
+  const NAMES = { fund: "營收成長分數（計分）", liq: "流動性分數（計分）", peg: "成長性價比 PEG（計分）", chip: "外資持股分數（計分）", qf: "外資持股比例", rev_hi: "營收距 12 月新高", tech: "趨勢（參考）", value: "估值（參考）", sup: "支撐位置（參考）",
     streak: "營收連續年增月數", rev3: "近 3 月營收年增", cum_yoy: "累計營收年增", accel: "營收動能", lv: "成交金額規模", f20: "外資 20 日",
     t20: "投信 20 日", b20: "月乖離", b60: "距季線", vr: "量能放大（5 日 / 60 日）", sup_score: "支撐分數", val_cheap: "河流圖位階（低）" };
   const bandTable = (b) => `<table><tr><th>分數區間</th><th>樣本數</th><th>勝率</th><th>平均超額報酬</th></tr>${Object.entries(b).map(([k, v]) =>
@@ -469,11 +470,11 @@ function renderHow() {
   $("#page").innerHTML = `<div class="how">
     <h3>分數怎麼來的：依回測結果設計</h3>
     <p>2024/10~2026/10 的回測（只用當時已公布的資料）中，<b>有預測力的是這四類</b>：營收成長（連續年增、營收創 12 個月新高、動能）、流動性（成交金額規模）、
-       成長性價比（PEG：營收成長 ÷ 本益比）、外資買超。單看河流圖便不便宜、支撐位置、趨勢、量能、投信都沒有預測力，因此<b>不計分</b>，但仍顯示在個股頁供參考。</p>
+       成長性價比（PEG：營收成長 ÷ 本益比）、外資持股比例。外資 20 日買超在修正重疊後不顯著，改用持股比例（排名）。單看河流圖便不便宜、支撐位置、趨勢、量能、投信都沒有預測力，因此<b>不計分</b>，但仍顯示在個股頁供參考。</p>
     <p><b>只有一個綜合分數</b>：短線（20 日）與長線（60 日）回測找到的有效指標完全相同，分開算的兩個分數相關係數 0.99，所以合併。
        短線、長線的差別在「選股規則」：進場條件與持有天數（見策略選股頁）。</p>
     <table><tr><th>面向</th><th>權重</th></tr>
-      ${["fund", "liq", "peg", "chip"].map((k) => `<tr><td>${{ fund: "營收成長（連續年增、創 12 月新高、動能）", liq: "流動性（20 日均成交金額排名）", peg: "成長性價比（近 3 月營收年增 ÷ 本益比，排名）", chip: "外資 20 日買超" }[k]}</td>
+      ${["fund", "liq", "peg", "chip"].map((k) => `<tr><td>${{ fund: "營收成長（連續年增、創 12 月新高、動能）", liq: "流動性（20 日均成交金額排名）", peg: "成長性價比（近 3 月營收年增 ÷ 本益比，排名）", chip: "外資持股比例（排名）" }[k]}</td>
         <td>${w.strats.score[k] ? pct(w.strats.score[k]) : "—"}</td></tr>`).join("")}</table>
     <p class="note">持有天數也測過：5、10 日勝率只有約 60%（雜訊大），20 日以上才穩定；60 日與 120 日年化報酬接近，但 120 日最差一期更深，所以長線維持 60 日。
        「大盤在季線上才進場」的濾網也測過：最差一期略淺，但平均報酬變少，不採用。</p>
@@ -498,7 +499,7 @@ function renderHow() {
     <p class="note"><b>營收動能</b> = 近 3 個月營收年增率 − 近 12 個月營收年增率。正值代表成長在加速，負值代表成長在放緩；
        ≤ −10 會標示「動能轉弱」，可視為營收預期可能下修的訊號。<br>
        <b>全年營收推估</b> = 今年已公布的累計營收 + 去年剩餘月份營收 ×（1 + 近 3 月年增率）。這是簡單外推，不是法人預估。</p>
-    <h3>外資</h3><table>${list(w.chip)}</table>
+    <h3>外資持股</h3><table>${list(w.chip)}</table>
     <p class="note">買超比例 = 期間內法人買超股數 ÷ 同期間總成交股數，大型股小型股才能公平比較。</p>
     <h3>趨勢（參考）</h3><table>${list(w.tech)}</table>
     <h3>本益比位階與河流圖</h3>
@@ -581,7 +582,7 @@ async function showDetail(code) {
         <div class="bigwrap">
           <div class="cur"><span class="big">${s.s.score == null ? "—" : s.s.score.toFixed(0)}</span><span class="sub">綜合分數 ${s.s.d5 != null ? "5日 " + signed(s.s.d5, 1, "") : ""}</span></div>
         </div>
-        <div class="subscores">${sub("營收成長", s.s.fund)}${sub("流動性", s.s.liq)}${sub("PEG", s.s.peg)}${sub("外資", s.s.chip)}
+        <div class="subscores">${sub("營收成長", s.s.fund)}${sub("流動性", s.s.liq)}${sub("PEG", s.s.peg)}${sub("外資持股", s.s.chip)}
           <div class="note" style="margin:8px 0 2px">參考（回測無預測力，不計分）</div>${sub("估值", s.s.value)}${sub("支撐位置", s.s.sup)}${sub("趨勢", s.s.tech)}</div>
         ${(m.rules || []).map((r) => `<span class="chip good">符合${r === "long_core" ? "長線核心" : "短線"}選股規則</span>`).join(" ")}
       </div>
@@ -620,6 +621,7 @@ async function showDetail(code) {
       <div>
         <h3>籌碼與技術</h3>
         <table class="kv">
+          ${kv("外資持股比例", fmt(m.qf, 1, "%"), "qf")}
           ${kv(LABEL.f20, signed(m.f20), "f20")}
           ${kv(LABEL.t20, signed(m.t20), "t20")}
           ${kv(LABEL.i5, signed(m.i5), "i5")}

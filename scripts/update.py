@@ -41,12 +41,12 @@ MIN_AVG_VALUE = 3e7      # 流動性門檻：20 日平均成交金額（元）
 # 估值、支撐、趨勢在回測中沒有預測力 → 不計分，只當參考資訊顯示
 # 短線、長線回測找不到不同的有效指標（兩個分數相關 0.99）→ 合併成一個綜合分數；
 # 短線 / 長線只差在「選股規則」（進場條件、持有天數）
-SCORE_W = {"fund": 0.40, "liq": 0.30, "peg": 0.20, "chip": 0.10}
+SCORE_W = {"fund": 0.40, "liq": 0.20, "peg": 0.20, "chip": 0.20}
 STRATS = {"score": SCORE_W}
 # 策略選股規則（回測驗證期勝率見網頁「策略選股」）
 RULES = {
     "long_core": {"h": "long", "n": 5, "sort": "f20", "t": "長線：營收連續年增 ≥ 12 個月＋20 日均成交金額 ≥ 10 億＋不過熱"},
-    "short_core": {"h": "short", "n": 3, "sort": "peg", "t": "短線：營收連續年增 ≥ 12 個月＋營收動能 > 0＋20 日均成交金額 ≥ 10 億＋股價在 20 日線下＋不過熱"},
+    "short_core": {"h": "short", "n": 3, "sort": "qf", "t": "短線：營收連續年增 ≥ 12 個月＋營收動能 > 0＋20 日均成交金額 ≥ 10 億＋股價在 20 日線下＋不過熱"},
 }
 # 精選：符合規則的股票中，外資 20 日買超比例最高的前 N 檔（回測中排序方式以訓練期表現選出）
 
@@ -66,7 +66,7 @@ def is_over(m: dict) -> bool:
     return (m.get("b20") or 0) > OVER_B20 or (m.get("b60") or 0) > OVER_B60
 
 
-SCORE_VER = 4          # 評分公式版本（改公式就 +1，分數歷史會重新累積）
+SCORE_VER = 5          # 評分公式版本（改公式就 +1，分數歷史會重新累積）
 RULE_MIN_VALUE = 1e9   # 20 日均成交金額 10 億
 
 
@@ -102,7 +102,7 @@ def industry(code: str, rev: dict):
     return ind
 # 只用少數核心指標計分，避免雜訊（其他數字仍會顯示在網頁上）
 FUND_W = {"streak": 0.35, "rev_hi": 0.35, "accel": 0.30}   # 連續年增、營收創 12 月新高、營收動能
-CHIP_W = {"f20": 1.0}
+CHIP_W = {"qf": 1.0}     # 外資持股比例（外資 20 日買超經 Newey-West 修正後不顯著，改用持股比例）
 TECH_W = {"b60": 1.0}
 
 S = requests.Session()
@@ -491,6 +491,35 @@ def update_tdcc(tdcc: dict):
         tdcc[day] = {c: [round(a, 2), round(b, 2), n] for c, (a, b, n) in out.items()}
     for k in sorted(tdcc)[:-60]:
         del tdcc[k]
+
+
+def fetch_qfii(d: date):
+    """外資持股比例 %：上市 MI_QFIIS ＋ 上櫃 insti/qfii → {代號: [比例, 發行股數]}"""
+    out = {}
+    js = get_json("https://www.twse.com.tw/rwd/zh/fund/MI_QFIIS",
+                  {"date": ymd(d), "selectType": "ALLBUT0999", "response": "json"}, rwd=True)
+    if js is not None:
+        record_probe("MI_QFIIS", js)
+        t = find_table(js, ["證券代號", "持股比率"])
+        if t:
+            f, rows = t
+            ir = col(f, "全體外資及陸資持股比率", "持股比率", exclude=("尚可", "上限"))
+            isu = col(f, "發行股數")
+            for r in rows:
+                out[str(r[0]).strip()] = [num(r[ir]), num(r[isu]) if isu is not None else None]
+    js = tpex_json("insti/qfii", d)
+    if js is not None:
+        record_probe("tpex_qfii", js)
+        t = find_table(js, ["代號", "持股比率"])
+        if t:
+            f, rows = t
+            fs = [str(x) for x in f]
+            ic, ir = col(fs, "代號"), col(fs, "持股比率", exclude=("尚可", "上限"))
+            isu = col(fs, "發行股數")
+            if ic is not None and ir is not None:
+                for r in rows:
+                    out[str(r[ic]).strip()] = [num(r[ir]), num(r[isu]) if isu is not None else None]
+    return out if len(out) >= 500 else None
 
 
 def roc_to_ymd(s):
@@ -928,7 +957,7 @@ def combine(ranks: dict, weights: dict, code: str):
     return round(s / w * 100, 1) if w >= 0.3 else None
 
 
-def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores, tdcc=None):
+def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores, tdcc=None, qf_latest=None):
     pdates = sorted(prices)
     tdates = sorted(t86)
     if not pdates:
@@ -990,6 +1019,9 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
         v = bw.get(code)
         if v:
             m["pe"], m["yld"], m["pb"] = v[:3]
+        q = ((qf_latest or {}).get("data") or {}).get(code)
+        if q and q[0] is not None:
+            m["qf"] = q[0]
         hist_pe = None
         if m.get("pe"):
             hist = [(pe_monthly[k].get(code) or [None])[0] for k in sorted(pe_monthly)[-PE_POS_MONTHS:]]
@@ -1230,6 +1262,7 @@ def main():
     t86 = load("t86.json", {})
     pe_monthly = load("pe_monthly.json", {})
     bw_latest = load("bwibbu_latest.json", {})
+    qf_latest = load("qfii_latest.json", {})
     meta = load("meta.json", {"nodata_prices": [], "nodata_t86": []})
     OTC_CODES.update(meta.get("otc_codes", []))
     OTC_LATEST.update(meta.get("otc_latest") or {})
@@ -1264,6 +1297,21 @@ def main():
         if st == "ok":
             bw_latest["data"].update(res)
             log(f"  上櫃本益比 {bw_latest['date']} ok ({len(res)})")
+    log("== 外資持股比例")
+    if prices and qf_latest.get("date") != max(prices):
+        for k in sorted(prices, reverse=True)[:3]:
+            if qf_latest.get("date") and qf_latest["date"] >= k:
+                break
+            res = fetch_qfii(datetime.strptime(k, "%Y%m%d").date())
+            if res:
+                qf_latest = {"date": k, "data": res}
+                cur = hist_read("qf", k[:6]) if (DATA / "hist").exists() else None
+                if cur is not None:
+                    cur[k] = res
+                    hist_write("qf", k[:6], cur)
+                log(f"  外資持股 {k} ok ({len(res)})")
+                break
+    save("qfii_latest.json", qf_latest)
     log("== 本益比月取樣（位階用）")
     update_pe_monthly(pe_monthly, otc_nd["pe"])
     log("== 加權指數")
@@ -1293,7 +1341,7 @@ def main():
     save("meta.json", meta)
     save("fundamentals.json", fund)
 
-    out = build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores, tdcc)
+    out = build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores, tdcc, qf_latest)
     save("index.json", index)
     save("scores.json", scores)
     save("fundamentals.json", fund)

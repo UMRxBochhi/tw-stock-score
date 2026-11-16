@@ -94,6 +94,7 @@ def build_records():
     px.update({d: {c: (v + [v[0], v[0]] if len(v) == 3 else v) for c, v in rows.items()}
                for d, rows in u.load("prices.json", {}).items()})
     t86 = load_hist("t86")
+    qfh = load_hist("qf")     # 外資持股比例（籌碼實驗與每日更新寫入；只有部分日期有）
     t86.update(u.load("t86.json", {}))
     revh = json.loads((HIST / "rev.json").read_text(encoding="utf-8")) if (HIST / "rev.json").exists() else {}
     for code, h in u.load("fundamentals.json", {}).get("rev_hist", {}).items():
@@ -164,6 +165,9 @@ def build_records():
                 if vol:
                     m["f20"] = sum(t86[d].get(code, [0, 0, 0])[0] for d in tds) / vol * 100
                     m["t20"] = sum(t86[d].get(code, [0, 0, 0])[1] for d in tds) / vol * 100
+            q = qfh.get(t, {}).get(code)
+            if q and q[0] is not None:
+                m["qf"] = q[0]
             h = {k: v for k, v in revh.get(code, {}).items() if k <= rk}
             if h:
                 rm = u.revenue_metrics(h)
@@ -238,7 +242,7 @@ def main():
               "strats": {}, "ic": {}}
 
     comps = ["fund", "liq", "peg", "chip", "tech", "value", "sup"]
-    raw = ["streak", "rev_hi", "rev3", "cum_yoy", "accel", "f20", "t20", "b20", "b60", "vr", "lv", "sup_score", "val_cheap"]
+    raw = ["qf", "streak", "rev_hi", "rev3", "cum_yoy", "accel", "f20", "t20", "b20", "b60", "vr", "lv", "sup_score", "val_cheap"]
 
     def ic_table(name, recs):
         out = {}
