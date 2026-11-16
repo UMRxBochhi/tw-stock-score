@@ -1,0 +1,36 @@
+name: chips
+
+# 實驗：融資、券資比、借券、外資持股比例的預測力（另一個排隊群組，不影響每日更新與補歷史資料）
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["scripts/exp_chips.py"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: chips
+  cancel-in-progress: false
+
+jobs:
+  chips:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: 抓融資、外資持股並實驗
+        run: python scripts/exp_chips.py
+      - name: commit
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/exp_chips.json data/hist/mg_* data/hist/qf_* data/hist/sbl_* 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "chips experiment: $(TZ=Asia/Taipei date +%F)"
+          for i in 1 2 3; do git pull --rebase -X theirs && git push && break; sleep 10; done

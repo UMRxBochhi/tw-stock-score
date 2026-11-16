@@ -67,6 +67,8 @@ const F = {
   gm: { t: "毛利率 %", short: "毛利率", g: (s) => s.m.gm, kind: "num1", suf: "%", grp: "獲利" },
   f20: { t: "外資 20 日買超 / 成交量 %", short: "外資20日", g: (s) => s.m.f20, kind: "signed", grp: "籌碼" },
   t20: { t: "投信 20 日買超 / 成交量 %", short: "投信20日", g: (s) => s.m.t20, kind: "signed", grp: "籌碼" },
+  big400: { t: "大戶持股 %（400 張以上，集保）", short: "大戶%", g: (s) => s.m.big400, kind: "num1", suf: "%", grp: "籌碼" },
+  big400_chg: { t: "大戶持股 4 週變化（百分點）", short: "大戶Δ", g: (s) => s.m.big400_chg, kind: "signed1", suf: "", grp: "籌碼" },
   i5: { t: "法人 5 日買超 / 成交量 %", short: "法人5日", g: (s) => s.m.i5, kind: "signed", grp: "籌碼" },
 };
 const LABEL = { rev_yoy: "月營收年增率", accel: "營收動能", cum_yoy: "累計營收年增率", roe: "ROE（年化）", gm: "毛利率",
@@ -621,6 +623,7 @@ async function showDetail(code) {
           ${kv(LABEL.f20, signed(m.f20), "f20")}
           ${kv(LABEL.t20, signed(m.t20), "t20")}
           ${kv(LABEL.i5, signed(m.i5), "i5")}
+          ${kv("大戶持股（400 張以上）", m.big400 != null ? `${m.big400.toFixed(1)}%${m.big400_chg != null ? `（4 週 ${signed(m.big400_chg, 2, " 百分點")}）` : "（累積 4 週後顯示變化）"}<br><span class="note">千張大戶 ${fmt(m.big1000, 1, "%")}・參考，尚未驗證</span>` : NA)}
           ${kv(LABEL.r20, signed(m.r20, 1), "r20")}
           ${kv(LABEL.b60, signed(m.b60, 1), "b60")}
           ${kv("20 日均成交金額", m.avgval ? (m.avgval / 1e8).toFixed(2) + " 億" : NA)}

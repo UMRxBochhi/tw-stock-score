@@ -459,6 +459,40 @@ def merge_otc(store: dict, fetcher, label: str, nodata: set, names: dict | None 
     return n
 
 
+def update_tdcc(tdcc: dict):
+    """集保戶股權分散表（每週五公布）：{日期: {代號: [400 張以上持股 %, 1000 張以上 %, 總人數]}}
+    公開資料只有最新一週，所以每天抓一次、換週才多一筆；歷史從開始記錄起累積"""
+    try:
+        r = S.get("https://opendata.tdcc.com.tw/getOD.ashx?id=1-5", timeout=60)
+        if r.status_code != 200:
+            raise RuntimeError(f"HTTP {r.status_code}")
+        txt = r.content.decode("utf-8-sig", errors="ignore")
+    except Exception as e:
+        probe["errors"].append(f"tdcc: {e}"[:200])
+        return
+    out, day = {}, None
+    for line in txt.splitlines()[1:]:
+        x = [v.strip().strip('"') for v in line.split(",")]
+        if len(x) < 6 or not x[2].isdigit():
+            continue
+        day, code, lv = x[0], x[1], int(x[2])
+        if not is_stock(code):
+            continue
+        o = out.setdefault(code, [0.0, 0.0, None])
+        pct = num(x[5]) or 0
+        if 12 <= lv <= 15:      # 400,001 股以上
+            o[0] += pct
+        if lv == 15:            # 1,000,001 股以上
+            o[1] += pct
+        if lv == 17:            # 合計
+            o[2] = num(x[3])
+    probe["calls"]["tdcc"] = {"ok": bool(out), "date": day, "n": len(out), "head": txt[:200]}
+    if day and out:
+        tdcc[day] = {c: [round(a, 2), round(b, 2), n] for c, (a, b, n) in out.items()}
+    for k in sorted(tdcc)[:-60]:
+        del tdcc[k]
+
+
 def roc_to_ymd(s):
     y, m, d = str(s).strip().split("/")
     return f"{int(y) + 1911}{int(m):02d}{int(d):02d}"
@@ -894,7 +928,7 @@ def combine(ranks: dict, weights: dict, code: str):
     return round(s / w * 100, 1) if w >= 0.3 else None
 
 
-def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores):
+def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores, tdcc=None):
     pdates = sorted(prices)
     tdates = sorted(t86)
     if not pdates:
@@ -988,6 +1022,15 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
         pos = m.get("fpe_pos", m.get("pe_pos"))
         if pos is not None:
             m["val_cheap"] = -pos
+        # 大戶持股（集保，每週）：參考用，資料累積夠了再驗證預測力
+        if tdcc:
+            tk = sorted(tdcc)
+            cur = tdcc[tk[-1]].get(code)
+            if cur:
+                m["big400"], m["big1000"] = cur[0], cur[1]
+                old = tdcc[tk[-5]].get(code) if len(tk) >= 5 else None
+                if old:
+                    m["big400_chg"] = round(cur[0] - old[0], 2)
         m["liquid"] = avg_val >= MIN_AVG_VALUE
         metrics[code] = m
 
@@ -1194,6 +1237,7 @@ def main():
     fund = load("fundamentals.json", {})
     index = load("index.json", {})
     scores = load("scores.json", {})
+    tdcc = load("tdcc.json", {})
 
     log("== 收盤行情")
     meta["nodata_prices"], n1 = update_daily(prices, meta["nodata_prices"], fetch_prices,
@@ -1224,6 +1268,9 @@ def main():
     update_pe_monthly(pe_monthly, otc_nd["pe"])
     log("== 加權指數")
     update_index(index)
+    log("== 集保大戶持股（每週）")
+    update_tdcc(tdcc)
+    save("tdcc.json", tdcc)
     log("== 月營收 / 財報")
     fund = fetch_fundamentals(fund)
     log("== 月營收歷史（公開資訊觀測站）")
@@ -1246,7 +1293,7 @@ def main():
     save("meta.json", meta)
     save("fundamentals.json", fund)
 
-    out = build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
+    out = build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores, tdcc)
     save("index.json", index)
     save("scores.json", scores)
     save("fundamentals.json", fund)
