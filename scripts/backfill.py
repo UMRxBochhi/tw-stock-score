@@ -19,8 +19,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import update as u  # noqa: E402
 
 HIST = u.DATA / "hist"
-START = date(2024, 4, 1)          # 回測從約 2024/10 開始（前面留 130 個交易日算支撐/均線）
-REV_START = (2022, 1)             # 月營收從 2022/01（算 2023 起的近 12 月年增）
+# 回測從約 2018/07 開始（前面留 130 個交易日算均線），涵蓋 2018 貿易戰、2020 疫情、2022 空頭
+START = date.fromisoformat(os.environ.get("BACKFILL_START", "2018-01-02"))
+REV_START = (START.year - 2, 1)   # 月營收往前多抓 2 年（算近 12 月年增、連續年增）
 TIME_BUDGET = float(os.environ.get("BACKFILL_MINUTES", "150")) * 60
 T0 = time.time()
 
@@ -30,14 +31,11 @@ def month_file(prefix, d):
 
 
 def load_month(prefix, ym):
-    p = HIST / f"{prefix}_{ym}.json"
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    return u.hist_read(prefix, ym)
 
 
 def save_month(prefix, ym, obj):
-    HIST.mkdir(parents=True, exist_ok=True)
-    (HIST / f"{prefix}_{ym}.json").write_text(json.dumps(obj, ensure_ascii=False, separators=(",", ":")),
-                                              encoding="utf-8")
+    u.hist_write(prefix, ym, obj)
 
 
 def out_of_time():
@@ -145,6 +143,8 @@ def main():
     u.save("probe_backfill.json", {"rwd_calls": u.rwd_calls, "tpex_calls": u.tpex_calls, "errors": u.probe["errors"][-20:],
                                    "minutes": round((time.time() - T0) / 60, 1),
                                    "finished_all": not out_of_time()})
+    if not out_of_time():
+        (HIST / "backfill_done.json").write_text(json.dumps({"start": START.isoformat(), "at": datetime.now(u.TW).isoformat()}))
     u.log(f"完成，用了 {u.rwd_calls} 次請求、{(time.time() - T0) / 60:.1f} 分鐘")
 
 

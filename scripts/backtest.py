@@ -26,9 +26,29 @@ BANDS = [(0, 40), (40, 50), (50, 60), (60, 70), (70, 80), (80, 101)]
 
 def load_hist(prefix):
     out = {}
-    for p in sorted(HIST.glob(f"{prefix}_*.json")):
-        out.update(json.loads(p.read_text(encoding="utf-8")))
+    for ym in u.hist_months(prefix):
+        out.update(u.hist_read(prefix, ym))
     return out
+
+
+MKT = {}   # 每個評估日的大盤狀態（0050）：{日期: {"up60": bool, "up120": bool, "f20": 報酬, "f60": 報酬}}
+
+
+def nw_t(xs, lag):
+    """Newey-West t 值：持有期重疊（每週評估、持有 20/60 日），相鄰期 IC 互相相關，一般 t 值會高估"""
+    n = len(xs)
+    if n < 10:
+        return None
+    mu = sum(xs) / n
+    e = [x - mu for x in xs]
+    s = sum(v * v for v in e) / n
+    for L in range(1, lag + 1):
+        s += 2 * (1 - L / (lag + 1)) * sum(e[i] * e[i - L] for i in range(L, n)) / n
+    return mu / math.sqrt(s / n) if s > 0 else None
+
+
+def p_two(t):
+    return math.erfc(abs(t) / math.sqrt(2)) if t is not None else None
 
 
 def spearman(xs, ys):
@@ -91,7 +111,24 @@ def build_records():
     tdates = sorted(t86)
     u.log(f"交易日 {N}（{dates[0]}~{dates[-1]}），法人 {len(tdates)} 日，股票 {len(codes)}")
 
+    # 大盤：0050（還原分割）
+    e50, last = [], None
+    for d in dates:
+        v = (px[d].get("0050") or [None])[0]
+        last = v if v else last
+        e50.append(last)
+    for i in range(1, N):
+        if e50[i] and e50[i - 1] and e50[i] / e50[i - 1] < 0.5:
+            k = e50[i - 1] / e50[i]
+            for j in range(i):
+                e50[j] = e50[j] / k if e50[j] else e50[j]
+
     eval_idx = list(range(LOOKBACK, N - HORIZON["short"], STEP))
+    for ti in eval_idx:
+        c = e50[ti]
+        if c and all(e50[ti - 119:ti + 1]):
+            MKT[dates[ti]] = {"up60": c > sum(e50[ti - 59:ti + 1]) / 60, "up120": c > sum(e50[ti - 119:ti + 1]) / 120,
+                              **{f"f{h}": e50[ti + h] / c - 1 for h in HORIZON.values() if ti + h < N}}
     records = []   # 每個時間點：{code: {...}}
     for ti in eval_idx:
         t = dates[ti]
@@ -215,9 +252,9 @@ def main():
                     vals.append(v)
             if vals:
                 mean = sum(vals) / len(vals)
-                sd = math.sqrt(sum((v - mean) ** 2 for v in vals) / max(1, len(vals) - 1))
-                out[k] = {"ic": round(mean, 4), "t": round(mean / sd * math.sqrt(len(vals)), 2) if sd else None,
-                          "n": len(vals)}
+                t = nw_t(vals, HORIZON[name] // STEP)
+                out[k] = {"ic": round(mean, 4), "t": round(t, 2) if t is not None else None,
+                          "p": round(p_two(t), 4) if t is not None else None, "n": len(vals)}
         return out
 
     def evaluate(name, recs, wts):
@@ -329,6 +366,35 @@ def main():
                             "basket_pos": round(sum(1 for x in bret if x > 0) / len(bret) * 100, 1),
                             "avg_ret": round(sum(bret) / len(bret) * 100, 2)}
         report["rules"][rid] = out
+
+    # 各年度、各大盤環境：照規則精選的組合表現（和同期 0050 比）
+    def bstats(rows):
+        if not rows:
+            return None
+        n = len(rows)
+        mk = [r[2] for r in rows if r[2] is not None]
+        return {"n": n, "pos": round(sum(r[0] > 0 for r in rows) / n * 100, 1),
+                "win": round(sum(r[1] > 0 for r in rows) / n * 100, 1),
+                "avg": round(sum(r[0] for r in rows) / n * 100, 2), "worst": round(min(r[0] for r in rows) * 100, 2),
+                "mkt": round(sum(mk) / len(mk) * 100, 2) if mk else None,
+                "beat_mkt": round(sum(r[0] > r[2] for r in rows if r[2] is not None) / len(mk) * 100, 1) if mk else None}
+    report["years"], report["regime"] = {}, {}
+    for rid, rule in u.RULES.items():
+        name = rule["h"]
+        rows_by = []
+        for t, snap in records:
+            codes = u.top_picks(list(snap.items()), rid)
+            ms = [snap[c] for c in codes if "fwd_" + name in snap[c]]
+            if not ms:
+                continue
+            mk = MKT.get(t, {})
+            rows_by.append((t, sum(m["fwd_" + name] for m in ms) / len(ms), sum(m["ex_" + name] for m in ms) / len(ms),
+                            mk.get(f"f{HORIZON[name]}"), mk))
+        years = sorted({t[:4] for t, *_ in rows_by})
+        report["years"][rid] = {y: bstats([(r, e, m) for t, r, e, m, _ in rows_by if t[:4] == y]) for y in years}
+        report["regime"][rid] = {k: {"on": bstats([(r, e, m) for _, r, e, m, g in rows_by if g.get(k) is True]),
+                                     "off": bstats([(r, e, m) for _, r, e, m, g in rows_by if g.get(k) is False])}
+                                 for k in ("up60", "up120")}
     u.save("backtest.json", report)
     u.log(json.dumps(report["strats"], ensure_ascii=False)[:3000])
     save_pool(records)

@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import re
@@ -29,7 +30,7 @@ PRICE_KEEP = 130         # 保留幾個交易日的收盤價（支撐/大量區�
 T86_KEEP = 25            # 保留幾個交易日的法人買賣超
 SCORE_KEEP = 60          # 保留幾天的分數歷史
 REV_MONTHS = 26          # 月營收歷史（算近 12 月年增需要 24 個月）
-PE_MONTHS = 84           # 本益比月取樣保留 7 年（回測需要；位階只用最近 5 年）
+PE_MONTHS = 120          # 本益比月取樣保留 10 年（回測從 2018 起需要；位階只用最近 5 年）
 PE_POS_MONTHS = 60
 MAX_RWD_CALLS = int(os.environ.get("MAX_RWD_CALLS", "320"))  # 每次執行最多打幾次 twse.com.tw
 RWD_SLEEP = 3.2          # 證交所網站有頻率限制，每次間隔秒數
@@ -135,6 +136,34 @@ def save(name, obj, path=None):
     path.mkdir(parents=True, exist_ok=True)
     (path / name).write_text(json.dumps(obj, ensure_ascii=False, separators=(",", ":")),
                              encoding="utf-8")
+
+
+def hist_read(prefix: str, ym: str) -> dict:
+    """data/hist 的月檔：新格式 .json.gz（壓縮），相容舊的 .json；兩個都有就合併"""
+    out = {}
+    js, gz = DATA / "hist" / f"{prefix}_{ym}.json", DATA / "hist" / f"{prefix}_{ym}.json.gz"
+    if js.exists():
+        out.update(json.loads(js.read_text(encoding="utf-8")))
+    if gz.exists():
+        for d, rows in json.loads(gzip.decompress(gz.read_bytes()).decode("utf-8")).items():
+            if d not in out or len(rows) > len(out[d]):
+                out[d] = rows
+    return out
+
+
+def hist_write(prefix: str, ym: str, obj: dict):
+    h = DATA / "hist"
+    h.mkdir(parents=True, exist_ok=True)
+    raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    (h / f"{prefix}_{ym}.json.gz").write_bytes(gzip.compress(raw, compresslevel=9, mtime=0))
+    old = h / f"{prefix}_{ym}.json"
+    if old.exists():
+        old.unlink()
+
+
+def hist_months(prefix: str):
+    h = DATA / "hist"
+    return sorted({p.name.split("_")[1].split(".")[0] for p in h.glob(f"{prefix}_*.json*")}) if h.exists() else []
 
 
 def num(v):
@@ -375,12 +404,17 @@ def fetch_t86_otc(d: date):
     if not t:
         return None, "nodata"
     f, rows = t
-    if len(f) < 24:
-        probe["errors"].append(f"tpex insti 欄位數 {len(f)}")
-        return None, "error"
+    nets = [i for i, x in enumerate(f) if "買賣超" in str(x)]
+    if len(f) >= 24:
+        idx = (4, 13, 22)
+    elif len(nets) >= 4:      # 舊格式：外資、投信、自營商、合計
+        idx = (nets[0], nets[1], nets[2])
+    else:
+        probe["errors"].append(f"tpex insti 欄位無法對應 {f}"[:200])
+        return None, "nodata"
     out = {}
     for r in rows:
-        out[str(r[0]).strip()] = [num(r[4]) or 0, num(r[13]) or 0, num(r[22]) or 0]
+        out[str(r[0]).strip()] = [num(r[idx[0]]) or 0, num(r[idx[1]]) or 0, num(r[idx[2]]) or 0]
     return (out if len(out) >= 100 else None), ("ok" if len(out) >= 100 else "nodata")
 
 
@@ -1138,13 +1172,12 @@ def sync_hist(prices, t86):
         for d, rows in store.items():
             by_month.setdefault(d[:6], {})[d] = rows
         for ym, days in by_month.items():
-            p = hist / f"{prefix}_{ym}.json"
-            cur = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+            cur = hist_read(prefix, ym)
             new = {d: r for d, r in days.items() if (d not in cur or len(r) > len(cur[d]))
                    and (prefix != "px" or len(next(iter(r.values()))) >= 5)}
             if new:
                 cur.update(new)
-                p.write_text(json.dumps(cur, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+                hist_write(prefix, ym, cur)
 
 
 # ---------------------------------------------------------------- main

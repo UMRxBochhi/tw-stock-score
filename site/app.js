@@ -427,8 +427,20 @@ function renderBacktest() {
     t20: "投信 20 日", b20: "月乖離", b60: "距季線", vr: "量能放大（5 日 / 60 日）", sup_score: "支撐分數", val_cheap: "河流圖位階（低）" };
   const bandTable = (b) => `<table><tr><th>分數區間</th><th>樣本數</th><th>勝率</th><th>平均超額報酬</th></tr>${Object.entries(b).map(([k, v]) =>
     `<tr><td>${k}</td><td>${v.n.toLocaleString()}</td><td>${bar(v.win)}</td><td>${signed(v.avg)}</td></tr>`).join("")}</table>`;
-  const icTable = (ic) => `<table><tr><th>指標</th><th>全期 IC</th><th>t 值</th><th>訓練期</th><th>驗證期</th></tr>${Object.keys(NAMES).filter((k) => ic.all[k]).map((k) =>
-    `<tr><td>${NAMES[k]}</td><td>${signed(ic.all[k].ic * 100, 1, "")}</td><td>${fmt(ic.all[k].t, 1)}</td><td>${ic.train[k] ? signed(ic.train[k].ic * 100, 1, "") : NA}</td><td>${ic.test[k] ? signed(ic.test[k].ic * 100, 1, "") : NA}</td></tr>`).join("")}</table>`;
+  const sig = (x) => x?.p != null && x.p < 0.05 && x.ic > 0;
+  const icTable = (ic) => `<table><tr><th>指標</th><th>全期 IC</th><th>t 值</th><th>p 值</th><th>訓練期</th><th>驗證期</th><th>可信？</th></tr>${Object.keys(NAMES).filter((k) => ic.all[k]).map((k) =>
+    `<tr><td>${NAMES[k]}</td><td>${signed(ic.all[k].ic * 100, 1, "")}</td><td>${fmt(ic.all[k].t, 1)}</td><td>${ic.all[k].p != null ? ic.all[k].p.toFixed(3) : "—"}</td>
+      <td>${ic.train[k] ? signed(ic.train[k].ic * 100, 1, "") : NA}</td><td>${ic.test[k] ? signed(ic.test[k].ic * 100, 1, "") : NA}</td>
+      <td>${sig(ic.train[k]) && sig(ic.test[k]) ? '<span class="flag good">兩期都顯著</span>' : sig(ic.all[k]) ? '<span class="flag">只有全期</span>' : '<span class="na">否</span>'}</td></tr>`).join("")}</table>`;
+  const RN = { long_core: "長線（5 檔、60 日）", short_core: "短線（3 檔、20 日）" };
+  const st = (x) => x ? `<td>${x.n}</td><td>${x.pos}%</td><td>${signed(x.avg, 1)}</td><td>${signed(x.mkt, 1)}</td><td>${x.beat_mkt ?? "—"}%</td><td>${signed(x.worst, 1)}</td>` : '<td colspan="6" class="na">無樣本</td>';
+  const head = '<th>期數</th><th>賺錢</th><th>平均報酬</th><th>同期 0050</th><th>贏 0050</th><th>最差</th>';
+  const yearsHtml = bt.years ? Object.entries(bt.years).map(([rid, ys]) => `<h3>${RN[rid] || rid}：各年度</h3>
+    <table><tr><th>進場年份</th>${head}</tr>${Object.entries(ys).map(([y, x]) => `<tr><td>${y}</td>${st(x)}</tr>`).join("")}</table>`).join("") : "";
+  const regHtml = bt.regime ? Object.entries(bt.regime).map(([rid, g]) => `<h3>${RN[rid] || rid}：進場時大盤位置</h3>
+    <table><tr><th>進場時 0050</th>${head}</tr>
+      <tr><td>在季線上</td>${st(g.up60?.on)}</tr><tr><td>在季線下</td>${st(g.up60?.off)}</tr>
+      <tr><td>在半年線上</td>${st(g.up120?.on)}</tr><tr><td>在半年線下</td>${st(g.up120?.off)}</tr></table>`).join("") : "";
   const sec = (k) => {
     const s = bt.strats[k]; if (!s) return "";
     const c = s.current;
@@ -442,6 +454,8 @@ function renderBacktest() {
   $("#page").innerHTML = `<div class="how">
     <p>回測期間 ${ymdTxt(bt.period[0])} ~ ${ymdTxt(bt.period[1])}，每週一次、共 ${bt.n_dates} 個時間點，只用當時已公布的資料計分。
        <b>勝率</b> = 贏過大盤的比例；<b>大盤</b> = 同期所有評分股票報酬的中位數（隨便亂挑勝率約 50%）；<b>超額報酬</b> = 個股報酬 − 中位數。</p>
+    ${yearsHtml}${regHtml}
+    <p class="note">「期數」是每週一個起點；同一年度裡的起點持有期會重疊，不是互相獨立的樣本。p 值已用 Newey-West 修正重疊。</p>
     ${sec("short")}${sec("long")}
     <p class="note">${bt.notes.join("；")}。回測反映的是過去，市場環境改變時不保證有效。</p></div>`;
 }
