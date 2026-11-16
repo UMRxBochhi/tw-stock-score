@@ -3,9 +3,6 @@ name: chips
 # 實驗：融資、券資比、借券、外資持股比例的預測力（另一個排隊群組，不影響每日更新與補歷史資料）
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ["scripts/exp_chips.py"]
 
 permissions:
   contents: write

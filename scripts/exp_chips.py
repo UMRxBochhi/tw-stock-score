@@ -1,5 +1,5 @@
 """
-實驗：融資、融券、借券、外資持股比例 有沒有預測力（2024/04 起、每週取樣）
+實驗：融資、融券、借券、外資持股比例 有沒有預測力（2018/07 起、每週取樣；等補歷史資料完成後手動觸發）
 由 .github/workflows/chips.yml 執行（另一個排隊群組，不影響每日更新與補歷史資料）
 輸出：data/exp_chips.json（結果＋各資料源欄位，除錯用）
 """
@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import update as u      # noqa: E402
 import backtest as b    # noqa: E402
 
-START = os.environ.get("CHIPS_START", "20240401")
+START = os.environ.get("CHIPS_START", "20180701")
 OUT = {"probe": {}, "errors": []}
 
 
@@ -117,10 +117,11 @@ def qfii_tpex(d):
         fs = [str(x) for x in f]
         ir = u.col(fs, "持股比率", "持股比例", exclude=("尚可", "上限"))
         isu = u.col(fs, "發行股數")
-        if ir is None:
+        ic = u.col(fs, "代號")          # 櫃買的表第一欄是「排行」，代號在第二欄
+        if ir is None or ic is None:
             continue
         TPEX_QFII[:] = [path]
-        return {str(r[0]).strip(): [u.num(r[ir]), u.num(r[isu]) if isu is not None else None] for r in rows}
+        return {str(r[ic]).strip(): [u.num(r[ir]), u.num(r[isu]) if isu is not None else None] for r in rows}
     return {}
 
 
@@ -151,7 +152,7 @@ def fetch_all(dates):
             store[k].update(u.hist_read(k, ym))
     for i, d in enumerate(dates):
         for k, (ftw, fto) in SOURCES.items():
-            if d in store[k] and len(store[k][d]) > 1500:
+            if d in store[k] and len(store[k][d]) > 1500 and (k != "qf" or "8299" in store[k][d] or d < "20200101"):
                 continue
             row = {}
             a = ftw(d)
