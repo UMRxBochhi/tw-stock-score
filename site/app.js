@@ -301,7 +301,7 @@ function renderRuleInfo() {
         ${row(`照規則挑 ${r.n} 檔：組合賺錢`, bt?.top_train, bt?.top_test, "basket_pos")}
         <tr><td>最差一期（照規則 ${r.n} 檔）</td><td>${bt?.top_train ? signed(bt.top_train.worst, 1) : "—"}</td><td>${bt?.top_test ? signed(bt.top_test.worst, 1) : "—"}</td></tr>
       </table>
-      <p class="note">回測 2024/10 起每週一次，只用當時已公布的資料；${bt?.top_test ? `驗證期共 ${bt.top_test.periods} 期` : ""}。這段期間是 AI 多頭，風格轉換時勝率可能下降。止損規則沒有回測過，未納入。</p></details>
+      <p class="note"><b>不是每週定期定額</b>：回測把 2024/10 起的每一週都當成「可能的開始日」各算一次，確認哪一週開始都差不多。實際操作是<b>一次買進、每 3 個月（短線每 1 個月）檢查換股</b>。只用當時已公布的資料；${bt?.top_test ? `驗證期共 ${bt.top_test.periods} 期` : ""}。這段期間是 AI 多頭，風格轉換時勝率可能下降。止損規則沒有回測過，未納入。</p></details>
   </div>`;
   $("#pickAllBtn").onclick = () => { state.pickAll = !state.pickAll; render(); };
 }
