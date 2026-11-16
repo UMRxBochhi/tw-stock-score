@@ -1,0 +1,35 @@
+name: probe
+
+# 探測上櫃資料格式（一次性除錯用）
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["scripts/probe_tpex.py"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python scripts/probe_tpex.py
+      - name: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/probe_tpex.json
+          git diff --cached --quiet || git commit -m "probe tpex"
+          git pull --rebase
+          git push
