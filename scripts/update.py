@@ -38,23 +38,24 @@ MIN_AVG_VALUE = 3e7      # 流動性門檻：20 日平均成交金額（元）
 # 兩種策略（依 2024/10~2026/10 回測結果設計，見 scripts/backtest.py）
 # 回測中有穩定預測力的只有：營收成長（連續年增、近3月、動能、累計）、流動性（成交金額規模）、外資買超
 # 估值、支撐、趨勢在回測中沒有預測力 → 不計分，只當參考資訊顯示
-STRATS = {
-    "short": {"fund": 0.50, "liq": 0.30, "chip": 0.20},
-    "long": {"fund": 0.50, "liq": 0.35, "chip": 0.15},
-}
+# 短線、長線回測找不到不同的有效指標（兩個分數相關 0.99）→ 合併成一個綜合分數；
+# 短線 / 長線只差在「選股規則」（進場條件、持有天數）
+SCORE_W = {"fund": 0.40, "liq": 0.30, "peg": 0.20, "chip": 0.10}
+STRATS = {"score": SCORE_W}
 # 策略選股規則（回測驗證期勝率見網頁「策略選股」）
 RULES = {
-    "long_core": {"h": "long", "n": 5, "t": "長線：營收連續年增 ≥ 12 個月＋20 日均成交金額 ≥ 10 億＋不過熱"},
-    "short_core": {"h": "short", "n": 3, "t": "短線：營收連續年增 ≥ 12 個月＋營收動能 > 0＋20 日均成交金額 ≥ 10 億＋股價在 20 日線下＋不過熱"},
+    "long_core": {"h": "long", "n": 5, "sort": "f20", "t": "長線：營收連續年增 ≥ 12 個月＋20 日均成交金額 ≥ 10 億＋不過熱"},
+    "short_core": {"h": "short", "n": 3, "sort": "peg", "t": "短線：營收連續年增 ≥ 12 個月＋營收動能 > 0＋20 日均成交金額 ≥ 10 億＋股價在 20 日線下＋不過熱"},
 }
 # 精選：符合規則的股票中，外資 20 日買超比例最高的前 N 檔（回測中排序方式以訓練期表現選出）
 
 
 # （試過「同產業最多 2 檔」：回測沒有比較好，訓練期最差一期反而從 −24% 變 −32%，所以不限制）
 def top_picks(cands: list, rid: str):
-    """cands: [(code, m), ...] → 精選代號：外資 20 日買超比例高的優先"""
+    """cands: [(code, m), ...] → 精選代號：長線外資 20 日買超比例高的優先、短線 PEG 高的優先（回測選出）"""
+    k = RULES[rid].get("sort", "f20")
     c = [(code, m) for code, m in cands if rid in (m.get("rules") or [])]
-    c.sort(key=lambda x: -(x[1].get("f20") if x[1].get("f20") is not None else -999))
+    c.sort(key=lambda x: -(x[1].get(k) if x[1].get(k) is not None else -1e9))
     return [code for code, _ in c[:RULES[rid]["n"]]]
 # 乖離過大：20 日乖離 > +20% 或季線乖離 > +50%。回測中這類股票勝率掉到 50% 上下 → 分數扣分、選股排除
 OVER_B20, OVER_B60, OVER_PENALTY = 20.0, 50.0, 15.0
@@ -64,11 +65,11 @@ def is_over(m: dict) -> bool:
     return (m.get("b20") or 0) > OVER_B20 or (m.get("b60") or 0) > OVER_B60
 
 
-SCORE_VER = 3          # 評分公式版本（改公式就 +1，分數歷史會重新累積）
+SCORE_VER = 4          # 評分公式版本（改公式就 +1，分數歷史會重新累積）
 RULE_MIN_VALUE = 1e9   # 20 日均成交金額 10 億
 
 
-def rule_hits(m: dict, liq_pct=None, rev3_pct=None):
+def rule_hits(m: dict):
     """固定門檻，使用者自己用看盤軟體也能照做。m 需要 streak、accel、b20、b60、avgval"""
     hits = []
     if (m.get("streak") or 0) >= 12 and (m.get("avgval") or 0) >= RULE_MIN_VALUE and not is_over(m):
@@ -99,7 +100,7 @@ def industry(code: str, rev: dict):
         ind = "金融保險業"
     return ind
 # 只用少數核心指標計分，避免雜訊（其他數字仍會顯示在網頁上）
-FUND_W = {"streak": 0.35, "rev3": 0.25, "accel": 0.20, "cum_yoy": 0.20}
+FUND_W = {"streak": 0.35, "rev_hi": 0.35, "accel": 0.30}   # 連續年增、營收創 12 月新高、營收動能
 CHIP_W = {"f20": 1.0}
 TECH_W = {"b60": 1.0}
 
@@ -545,6 +546,9 @@ def revenue_metrics(h: dict):
     out["rev12"] = ratio(12)
     if out["rev3"] is not None and out["rev12"] is not None:
         out["accel"] = round(out["rev3"] - out["rev12"], 2)
+    prev = [h[k][0] for k in (shift(last, i) for i in range(1, 13)) if k in h and h[k][0]]
+    if len(prev) >= 10 and h[last][0]:
+        out["rev_hi"] = round((h[last][0] / max(prev) - 1) * 100, 2)   # 最新月營收距前 12 個月最高 %
     streak = 0
     k = last
     while k in h and h[k][1] is not None and h[k][1] > 0:
@@ -945,6 +949,8 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
                 m["fg"], m["feps"], m["fpe"] = round(g, 1), round(feps, 2), round(m["p"] / feps, 2)
                 if hist_pe:
                     m["fpe_pos"] = round(sum(1 for h in hist_pe if h < m["fpe"]) / len(hist_pe) * 100, 1)
+        if m.get("pe") and m["pe"] > 0 and m.get("rev3") is not None:
+            m["peg"] = round(m["rev3"] / m["pe"], 3)       # 成長性價比：近 3 月營收年增 ÷ 本益比
         pos = m.get("fpe_pos", m.get("pe_pos"))
         if pos is not None:
             m["val_cheap"] = -pos
@@ -985,7 +991,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
     etfs.sort(key=lambda e: -e["avgval"])
 
     uni = {c: m for c, m in metrics.items() if m["liquid"]}
-    keys = set(FUND_W) | set(CHIP_W) | set(TECH_W) | set(VAL_W) | {"avgval"}
+    keys = set(FUND_W) | set(CHIP_W) | set(TECH_W) | set(VAL_W) | {"avgval", "peg"}
     ranks = {k: pct_rank({c: m.get(k) for c, m in uni.items()}) for k in keys}
 
     stocks = []
@@ -1004,33 +1010,31 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
             sc["value"] = round(sum(v * w for v, w in vparts) / vw, 1) if vw >= 0.5 else None
             sc["sup"] = m.get("sup_score")
             sc["liq"] = round(ranks["avgval"][code] * 100, 1)
-            m["rules"] = rule_hits(m, ranks["avgval"].get(code), ranks["rev3"].get(code))
+            sc["peg"] = round(ranks["peg"][code] * 100, 1) if code in ranks["peg"] else None
+            m["rules"] = rule_hits(m)
             for name, wts in STRATS.items():
                 sc[name] = strat_score(sc, m, wts)
             m["pct"] = {k: round(ranks[k][code] * 100) for k in keys if code in ranks[k]}
         stocks.append({"c": code, "n": names.get(code, ""), "ind": industry(code, rev), "mk": "o" if code in otc_now else "t",
                        "s": sc, "m": m})
-    stocks.sort(key=lambda x: (x["s"].get("long") is None, -(x["s"].get("long") or 0)))
+    stocks.sort(key=lambda x: (x["s"].get("score") is None, -(x["s"].get("score") or 0)))
 
     # 分數歷史 → 5 日分數變化（{日期: {代號: [短線, 長線]}}）
     # 評分公式改版時，舊分數不能拿來比（5 日變化會失真）→ 清掉重新累積
     if scores.get("_v") != SCORE_VER:
         scores.clear()
         scores["_v"] = SCORE_VER
-    scores[last] = {x["c"]: [x["s"].get("short"), x["s"].get("long")] for x in stocks
-                    if x["s"].get("short") is not None or x["s"].get("long") is not None}
+    scores[last] = {x["c"]: x["s"]["score"] for x in stocks if x["s"].get("score") is not None}
     for k in sorted(k for k in scores if k.isdigit())[:-SCORE_KEEP]:
         del scores[k]
     sdates = sorted(k for k in scores if k.isdigit())
     ref = scores[sdates[-6]] if len(sdates) >= 6 else {}
     for x in stocks:
         old = ref.get(x["c"])
-        if not old:
+        if old is None:
             continue
-        for i, name in enumerate(("short", "long")):
-            t = x["s"].get(name)
-            if t is not None and old[i] is not None:
-                x["s"]["d5_" + name] = round(t - old[i], 1)
+        if x["s"].get("score") is not None:
+            x["s"]["d5"] = round(x["s"]["score"] - old, 1)
 
     # 市場概況
     chgs = [m.get("chg") for m in metrics.values() if m.get("chg") is not None]
@@ -1047,7 +1051,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
     # 產業統計
     inds = {}
     for x in stocks:
-        if x["ind"] and x["s"].get("long") is not None and x["s"].get("short") is not None:
+        if x["ind"] and x["s"].get("score") is not None:
             inds.setdefault(x["ind"], []).append(x)
     industries = []
     for name, lst in inds.items():
@@ -1055,16 +1059,13 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
         chg = [x["m"]["chg"] for x in lst if x["m"].get("chg") is not None]
         industries.append({
             "ind": name, "n": len(lst),
-            "short": round(sum(x["s"]["short"] for x in lst) / len(lst), 1),
-            "long": round(sum(x["s"]["long"] for x in lst) / len(lst), 1),
+            "score": round(sum(x["s"]["score"] for x in lst) / len(lst), 1),
+            "cand": sum(1 for x in lst if "long_core" in (x["m"].get("rules") or [])),
             "r20": round(sum(r20) / len(r20), 2) if r20 else None,
             "chg": round(sum(chg) / len(chg), 2) if chg else None,
-            "top_short": [[x["c"], x["n"], x["s"]["short"]]
-                          for x in sorted(lst, key=lambda x: -x["s"]["short"])[:3]],
-            "top_long": [[x["c"], x["n"], x["s"]["long"]]
-                         for x in sorted(lst, key=lambda x: -x["s"]["long"])[:3]],
+            "top": [[x["c"], x["n"], x["s"]["score"]] for x in sorted(lst, key=lambda x: -x["s"]["score"])[:3]],
         })
-    industries.sort(key=lambda i: -i["long"])
+    industries.sort(key=lambda i: -i["score"])
 
     # 個股明細檔（點開個股才載入）
     sdir = OUT / "s"
@@ -1103,8 +1104,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores)
                 re_.append(m["feps"])
             det["river"] = {"m": rm, "p": rp, "e": re_, "q": qs}
         sd = [d for d in sdates if code in scores[d]]
-        det["sc"] = {"d": sd, "short": [scores[d][code][0] for d in sd],
-                     "long": [scores[d][code][1] for d in sd]}
+        det["sc"] = {"d": sd, "score": [scores[d][code] for d in sd]}
         h = rev_hist.get(code, {})
         det["rev"] = [[k, *h[k]] for k in sorted(h)]
         (sdir / f"{code}.json").write_text(json.dumps(det, ensure_ascii=False, separators=(",", ":")),
@@ -1233,7 +1233,7 @@ def main():
         pool = load("pool.json", None)
         if pool:
             save("pool.json", pool, OUT)
-        n = sum(1 for s in out["stocks"] if s["s"].get("long") is not None)
+        n = sum(1 for s in out["stocks"] if s["s"].get("score") is not None)
         log(f"輸出完成：{out['date']}，共 {len(out['stocks'])} 檔，有總分 {n} 檔")
     else:
         log("沒有收盤資料，無法輸出")

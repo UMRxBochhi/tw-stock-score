@@ -132,6 +132,7 @@ def build_records():
                 rm = u.revenue_metrics(h)
                 m["accel"] = rm.get("accel")
                 m["rev3"], m["rev12"], m["streak"] = rm.get("rev3"), rm.get("rev12"), rm.get("streak")
+                m["rev_hi"] = rm.get("rev_hi")
                 m["cum_yoy"] = cum_yoy(h, max(h))
                 gs = [x for x in (rm.get("rev3"), rm.get("rev12")) if x is not None]
             else:
@@ -143,6 +144,8 @@ def build_records():
                 hist = [x for x in hist if x]
                 if s and s[0] and s[1] and len(hist) >= 24:
                     pe = s[0] * p / s[1]
+                    if m.get("rev3") is not None and pe > 0:
+                        m["peg"] = m["rev3"] / pe
                     pos = sum(1 for x in hist if x < pe) / len(hist) * 100
                     if gs and rev_ind.get(code) not in u.FWD_SKIP_IND:
                         g = max(-50.0, min(80.0, sum(gs) / len(gs)))
@@ -166,12 +169,13 @@ def build_records():
                     if "fwd_" + name in m:
                         m["ex_" + name] = m["fwd_" + name] - med
         # 分數（與上線版相同規則）
-        keys = set(u.FUND_W) | set(u.CHIP_W) | set(u.TECH_W) | {"lv"}
+        keys = set(u.FUND_W) | set(u.CHIP_W) | set(u.TECH_W) | {"lv", "peg"}
         ranks = {k: u.pct_rank({c: m.get(k) for c, m in snap.items()}) for k in keys}
         for c, m in snap.items():
-            m["rules"] = u.rule_hits(m, ranks["lv"].get(c), ranks["rev3"].get(c))
+            m["rules"] = u.rule_hits(m)
             sc = {
                 "liq": ranks["lv"][c] * 100 if c in ranks["lv"] else None,
+                "peg": ranks["peg"][c] * 100 if c in ranks["peg"] else None,
                 "fund": u.combine(ranks, u.FUND_W, c),
                 "chip": u.combine(ranks, u.CHIP_W, c),
                 "tech": u.combine(ranks, u.TECH_W, c),
@@ -196,8 +200,8 @@ def main():
                         "精選 N 檔：符合條件的股票中，外資 20 日買超比例最高的 N 檔"],
               "strats": {}, "ic": {}}
 
-    comps = ["fund", "liq", "chip", "tech", "value", "sup"]
-    raw = ["streak", "rev3", "cum_yoy", "accel", "f20", "t20", "b20", "b60", "vr", "lv", "sup_score", "val_cheap"]
+    comps = ["fund", "liq", "peg", "chip", "tech", "value", "sup"]
+    raw = ["streak", "rev_hi", "rev3", "cum_yoy", "accel", "f20", "t20", "b20", "b60", "vr", "lv", "sup_score", "val_cheap"]
 
     def ic_table(name, recs):
         out = {}
@@ -255,7 +259,7 @@ def main():
         ic_all = ic_table(name, recs)
         ic_train = ic_table(name, train)
         report["ic"][name] = {"all": ic_all, "train": ic_train, "test": ic_table(name, test)}
-        cur = u.STRATS[name]
+        cur = u.SCORE_W
         # 校正：訓練期 IC > 0 的面向依 IC 分配權重，與目前權重各半（避免過度擬合）
         pos = {k: max(0.0, ic_train.get(k, {}).get("ic", 0.0)) for k in comps}
         tot = sum(pos.values())
@@ -280,7 +284,7 @@ def main():
         name = rule["h"]
         recs = [r for r in records if any("ex_" + name in m for m in r[1].values())]
         nt = int(len(recs) * TRAIN_FRAC)
-        out = {"h": u.STRATS and HORIZON[name], "t": rule["t"]}
+        out = {"h": HORIZON[name], "t": rule["t"]}
         for lab, part in (("all", recs), ("train", recs[:nt]), ("test", recs[nt:])):
             ex = [m["ex_" + name] for _, s in part for m in s.values() if rid in m.get("rules", []) and "ex_" + name in m]
             raw_ret = [m["fwd_" + name] for _, s in part for m in s.values() if rid in m.get("rules", []) and "fwd_" + name in m]
@@ -351,7 +355,7 @@ def save_pool(records):
             for m in snap.values():
                 if "ex_" + name not in m:
                     continue
-                v = u.strat_score(m["sc"], m, u.STRATS[name])
+                v = u.strat_score(m["sc"], m, u.SCORE_W)
                 if v is None:
                     continue
                 hit = 1 if (("long_core" if name == "long" else "short_core") in m.get("rules", [])) else 0

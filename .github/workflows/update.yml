@@ -36,6 +36,14 @@ jobs:
       - name: 抓資料並計分
         run: python scripts/update.py
 
+      - name: 回測（每天用最新資料重算勝率）
+        if: always()
+        continue-on-error: true
+        run: |
+          python scripts/backtest.py
+          mkdir -p site/data
+          cp data/backtest.json data/pool.json site/data/
+
       - name: 把資料 commit 回 repo
         if: always()
         run: |

@@ -1,11 +1,9 @@
 name: backfill
 
-# 一次性補歷史資料並跑回測；push 這兩支程式或手動觸發時執行
+# 一次性補歷史資料並跑回測
+# 只手動觸發（push 會觸發 update，同一個排隊群組只能留一個等待中的工作，避免互相取消）
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ["scripts/backfill.py", "scripts/backtest.py"]
 
 permissions:
   contents: write
