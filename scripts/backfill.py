@@ -24,6 +24,7 @@ START = date.fromisoformat(os.environ.get("BACKFILL_START", "2018-01-02"))
 REV_START = (START.year - 2, 1)   # 月營收往前多抓 2 年（算近 12 月年增、連續年增）
 TIME_BUDGET = float(os.environ.get("BACKFILL_MINUTES", "150")) * 60
 T0 = time.time()
+FETCHED = [0]     # 這一輪實際補到幾筆（0 筆又沒補完 = 卡住，停止自動接續）
 
 
 def month_file(prefix, d):
@@ -56,6 +57,7 @@ def backfill_daily(prefix, fetcher, nodata):
                 res, st = fetcher(d)
                 if st == "ok":
                     months[ym][k] = res[0] if prefix == "px" else res
+                    FETCHED[0] += 1
                     u.log(f"  {prefix} {k} ok")
                     save_month(prefix, ym, months[ym])
                 elif st == "nodata":
@@ -78,6 +80,7 @@ def backfill_otc(prefix, fetcher, nodata):
                 res, st = fetcher(d)
                 if st == "ok":
                     rows[k].update(res[0] if prefix == "px" else res)
+                    FETCHED[0] += 1
                     save_month(prefix, k[:6], rows)
                     u.log(f"  上櫃 {prefix} {k} ok")
                 elif st == "nodata":
@@ -104,6 +107,7 @@ def backfill_revenue():
                 if res:
                     for code, v in res.items():
                         rev.setdefault(code, {})[key] = v
+                    FETCHED[0] += 1
                     u.log(f"  rev {mk} {key} ok ({len(res)})")
             m += 1
             if m > 12:
@@ -145,6 +149,9 @@ def main():
                                    "finished_all": not out_of_time()})
     if not out_of_time():
         (HIST / "backfill_done.json").write_text(json.dumps({"start": START.isoformat(), "at": datetime.now(u.TW).isoformat()}))
+    elif FETCHED[0] == 0:
+        (HIST / "backfill_stalled.json").write_text(json.dumps({"start": START.isoformat(), "at": datetime.now(u.TW).isoformat(),
+                                                               "errors": u.probe["errors"][-10:]}, ensure_ascii=False))
     u.log(f"完成，用了 {u.rwd_calls} 次請求、{(time.time() - T0) / 60:.1f} 分鐘")
 
 

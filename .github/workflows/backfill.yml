@@ -2,13 +2,9 @@ name: backfill
 
 # 一次性補歷史資料並跑回測
 # 只手動觸發（push 會觸發 update，同一個排隊群組只能留一個等待中的工作，避免互相取消）
-# 一次跑不完（每次最多約 160 分鐘）會自動接著觸發下一輪，最多 6 輪
+# 一次跑不完（每次最多約 160 分鐘）：補完一輪 → 觸發每日更新（網站保持最新）→ 更新結束再接著補，直到補完或卡住
 on:
   workflow_dispatch:
-    inputs:
-      round:
-        description: "第幾輪（自動接續用）"
-        default: "1"
 
 permissions:
   contents: write
@@ -44,16 +40,12 @@ jobs:
           git diff --cached --quiet || git commit -m "backfill/backtest: $(TZ=Asia/Taipei date +%F)"
           git pull --rebase -X theirs
           git push
-      - name: 還沒補完就接著跑下一輪
+      - name: 交給每日更新（更新網站後會再接著補下一輪）
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-          ROUND: ${{ github.event.inputs.round || '1' }}
         run: |
           if grep -q "2018-01-02" data/hist/backfill_done.json 2>/dev/null; then
             echo "歷史資料已補完"
-          elif [ "$ROUND" -lt 6 ]; then
-            gh workflow run backfill.yml --ref main -f round=$((ROUND + 1))
-          else
-            echo "已跑 6 輪仍未補完，停止自動接續（請看 data/probe_backfill.json）"
           fi
+          gh workflow run update.yml --ref main

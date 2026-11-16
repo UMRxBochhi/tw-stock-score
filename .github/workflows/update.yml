@@ -67,6 +67,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! grep -q "2018-01-02" data/hist/backfill_done.json 2>/dev/null; then
-            gh workflow run backfill.yml --ref main -f round=1 || true
+          if ! grep -q "2018-01-02" data/hist/backfill_done.json 2>/dev/null && [ ! -f data/hist/backfill_stalled.json ]; then
+            gh workflow run backfill.yml --ref main || true
           fi
