@@ -20,6 +20,69 @@ W_BEST = R.COMPOSITES["C B＋低波動"]
 SPLIT = "20230615"
 
 
+def multibagger(usable):
+    """翻倍股分析：一年後（250 個交易日）漲一倍的股票，事前長什麼樣子？高分股翻倍的機率有多高？"""
+    px = b.load_hist("px")
+    dates = sorted(px)
+    di = {d: i for i, d in enumerate(dates)}
+    rows = []
+    for t, snap in usable:
+        i = di.get(t)
+        if i is None or i + 250 >= len(dates):
+            continue
+        for c, m in snap.items():
+            path = [px[d].get(c) for d in dates[i:i + 251]]
+            path = [x for x in path if x]
+            if len(path) < 200 or len(u.after_split(path)) != len(path):
+                continue
+            f = path[-1][0] / m["p"] - 1
+            rows.append((t, m.get("S"), f, m.get("rev_hi"), m.get("accel"), m.get("streak"), m.get("cap"), m.get("b60")))
+    if not rows:
+        return None
+    n = len(rows)
+    pct = lambda xs: round(sum(xs) / len(xs) * 100, 1) if xs else None
+    out = {"樣本（股票×時間點）": n, "期間": [rows[0][0], rows[-1][0]],
+           "一年翻倍機率（全部）": pct([r[2] >= 1 for r in rows]),
+           "一年漲 50% 以上機率（全部）": pct([r[2] >= 0.5 for r in rows]),
+           "一年跌 30% 以上機率（全部）": pct([r[2] <= -0.3 for r in rows])}
+    # 依分數分 5 組
+    sc = sorted([r for r in rows if r[1] is not None], key=lambda r: r[1])
+    q = len(sc) // 5
+    groups = {}
+    for k in range(5):
+        g = sc[k * q:(k + 1) * q] if k < 4 else sc[4 * q:]
+        fs = sorted(r[2] for r in g)
+        groups[f"分數第 {k + 1} 組（{'最低' if k == 0 else '最高' if k == 4 else ''}）"] = {
+            "翻倍機率": pct([x >= 1 for x in fs]), "漲50%+": pct([x >= 0.5 for x in fs]), "跌30%+": pct([x <= -0.3 for x in fs]),
+            "中位數報酬": round(fs[len(fs) // 2] * 100, 1), "平均報酬": round(sum(fs) / len(fs) * 100, 1)}
+    out["依分數分組"] = groups
+    # 翻倍股事前特徵 vs 全部
+    dbl = [r for r in rows if r[2] >= 1]
+    feat = lambda rs, f: pct([f(r) for r in rs])
+    chars = {"營收創 12 月新高": lambda r: r[3] is not None and r[3] >= 0, "營收動能 > 0": lambda r: r[4] is not None and r[4] > 0,
+             "營收連續年增 ≥ 6 個月": lambda r: (r[5] or 0) >= 6, "分數 ≥ 70": lambda r: (r[1] or 0) >= 70,
+             "非市值前 100 大（中小型）": lambda r: r[6] is None or True, "股價在季線上": lambda r: (r[7] or 0) > 0}
+    caps = {}
+    for t, *_ in rows:
+        pass
+    out["翻倍股事前特徵（翻倍股 vs 全部）"] = {k: [feat(dbl, f), feat(rows, f)] for k, f in chars.items() if not k.startswith("非市值")}
+    out["翻倍股樣本數"] = len(dbl)
+    # 每期分數前 20 名裡，至少有一檔一年後翻倍的比例；以及平均有幾檔
+    per = {}
+    for r in rows:
+        per.setdefault(r[0], []).append(r)
+    hits, cnts, rets = [], [], []
+    for t, rs in per.items():
+        top = sorted([r for r in rs if r[1] is not None], key=lambda r: -r[1])[:20]
+        k = sum(1 for r in top if r[2] >= 1)
+        hits.append(k > 0)
+        cnts.append(k)
+        rets.append(sum(r[2] for r in top) / len(top))
+    out["分數前 20 名（等權）"] = {"至少一檔翻倍的期數比例": pct(hits), "平均每期有幾檔翻倍": round(sum(cnts) / len(cnts), 2),
+                             "一年後組合報酬中位數": round(sorted(rets)[len(rets) // 2] * 100, 1)}
+    return out
+
+
 def main():
     records = b.build_records()
     qfh = b.load_hist("qf")
@@ -152,6 +215,7 @@ def main():
             "最大回撤（平均/最差）": [round(sum(r["dd"] for r in runs) / len(runs) * 100, 1), round(min(r["dd"] for r in runs) * 100, 1)],
             "平均每季換手": round(sum(sum(r["turn"][1:]) for r in runs) / max(1, sum(len(r["turn"]) - 1 for r in runs)) * 100, 1)}
         u.log(name + " " + json.dumps(out["strategies"][name], ensure_ascii=False))
+    out["multibagger"] = multibagger(usable)
     u.save("research2.json", out)
 
 
