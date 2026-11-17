@@ -426,6 +426,76 @@ def main():
         for name, rule in EXITS.items():
             out["exit_rules"][f"前 {N_} 名｜{name}"] = res = exit_test(N_, rule)
             u.log(f"賣出規則 前{N_} {name}: " + json.dumps(res, ensure_ascii=False))
+    # ---- 分散版：基本面分數前 N 檔、每個產業最多 K 檔，每 E 個月整組換；可選台積電核心
+    def div_test(N, K, E, core=0.0):
+        w = {}
+        eq = em = pk = 1.0
+        dd = 0.0
+        seg = {"train": [1.0, 1.0, 0], "test": [1.0, 1.0, 0]}
+        n_m = wins = 0
+        tos = []
+        n_ind = []
+        for n, idx in enumerate(reb):
+            t, snap = records[idx]
+            mk = snap.get("__mkt")
+            if not mk:
+                continue
+            w = {c: v for c, v in w.items() if snap.get(c, {}).get("hold") is not None}
+            tw = sum(w.values())
+            w = {c: v / tw for c, v in w.items()} if tw else {}
+            to = 0.0
+            if n % E == 0 or not w:
+                sc = user_score(snap, FUND, None, None)
+                pick, cnt = [], {}
+                for c in sorted(sc, key=lambda c: -sc[c]):
+                    if snap[c].get("hold") is None or c == "2330":
+                        continue
+                    g = ind_of(c) or "?"
+                    if K and cnt.get(g, 0) >= K:
+                        continue
+                    cnt[g] = cnt.get(g, 0) + 1
+                    pick.append(c)
+                    if len(pick) >= N:
+                        break
+                if not pick:
+                    continue
+                n_ind.append(len(cnt))
+                nw = {c: (1 - core) / len(pick) for c in pick}
+                if core and snap.get("2330", {}).get("hold") is not None:
+                    nw["2330"] = nw.get("2330", 0) + core
+                else:
+                    nw = {c: 1 / len(pick) for c in pick}
+                to = sum(abs(nw.get(c, 0) - w.get(c, 0)) for c in set(nw) | set(w)) / 2 if w else 1.0
+                w = nw
+                tos.append(to)
+            r = sum(v * snap[c]["hold"] for c, v in w.items()) - to * COST
+            tot = sum(v * (1 + snap[c]["hold"]) for c, v in w.items())
+            w = {c: v * (1 + snap[c]["hold"]) / tot for c, v in w.items()}
+            eq *= 1 + r
+            em *= 1 + mk["hold"]
+            wins += r > mk["hold"]
+            pk = max(pk, eq)
+            dd = min(dd, eq / pk - 1)
+            k = "train" if t < SPLIT else "test"
+            seg[k][0] *= 1 + r
+            seg[k][1] *= 1 + mk["hold"]
+            seg[k][2] += 1
+            n_m += 1
+        cg = lambda f, y: round((f ** (1 / y) - 1) * 100, 1) if y > 0 else None
+        return {"年化": cg(eq, n_m / 12), "0050 年化": cg(em, n_m / 12),
+                "2018-2023 年化": cg(seg["train"][0], seg["train"][2] / 12), "2018-2023 0050": cg(seg["train"][1], seg["train"][2] / 12),
+                "2023-2026 年化": cg(seg["test"][0], seg["test"][2] / 12), "2023-2026 0050": cg(seg["test"][1], seg["test"][2] / 12),
+                "每月贏 0050 比例": round(wins / max(1, n_m) * 100, 1), "最大回撤": round(dd * 100, 1),
+                "平均涵蓋產業數": round(sum(n_ind) / len(n_ind), 1) if n_ind else None,
+                "平均每次換手": round(sum(tos[1:]) / max(1, len(tos) - 1) * 100, 1)}
+
+    out["diversified"] = {}
+    for core in (0.0, 0.4):
+        for E in (1, 3):
+            for N, K in ((10, None), (10, 2), (20, None), (20, 2), (20, 3), (30, 2), (30, 3)):
+                name = f"{'台積電 40%＋' if core else ''}前 {N} 檔｜每產業{'最多 ' + str(K) + ' 檔' if K else '不限'}｜每 {E} 個月換"
+                out["diversified"][name] = res = div_test(N, K, E, core)
+                u.log(f"分散 {name}: " + json.dumps(res, ensure_ascii=False))
     out["persistence"] = persistence(records, reb, ind_of, e, di)
     u.save("research3.json", out)
 
