@@ -519,7 +519,185 @@ def fetch_qfii(d: date):
             if ic is not None and ir is not None:
                 for r in rows:
                     out[str(r[ic]).strip()] = [num(r[ir]), num(r[isu]) if isu is not None else None]
-    return out if len(out) >= 500 else None
+    tw = set(_TWSE_CODES)
+    n_tw = sum(1 for c in out if c in tw)
+    probe["calls"]["qfii_counts"] = {"date": ymd(d), "total": len(out), "twse": n_tw}
+    return out if n_tw >= 500 else None      # 上市還沒公布（只有上櫃）就不算抓到，下次再抓
+
+
+_TWSE_CODES: list = []     # 上市代號（main 從最新收盤行情填入）
+
+
+# ---------------------------------------------------------------- 第一步：營收預估上修、法說會、新聞
+def est12(h: dict, k: str):
+    """月份 k 時推估的「未來 12 個月營收」= 近 12 個月營收 ×（1 + 近 3 個月年增率）。
+    每月新營收公布後重算一次；這個數字比上個月高 = 營收預估上修"""
+    def sh(k, n):
+        y, m = int(k[:-2]), int(k[-2:]) - n
+        while m <= 0:
+            y, m = y - 1, m + 12
+        return f"{y}{m:02d}"
+    cur = [h.get(sh(k, i), [None])[0] for i in range(12)]
+    p3 = [h.get(sh(k, i + 12), [None])[0] for i in range(3)]
+    if None in cur or None in p3 or not sum(p3):
+        return None
+    g = max(-0.5, min(1.5, sum(cur[:3]) / sum(p3) - 1))
+    return sum(cur) * (1 + g)
+
+
+def revision_metrics(h: dict):
+    """營收預估修正：最近一個月、近 3 個月的上修幅度，以及連續上修幾個月；回傳近 12 個月的預估歷史（畫圖用）"""
+    if not h:
+        return {}
+    last = max(h)
+    y, m = int(last[:-2]), int(last[-2:])
+    keys = []
+    for j in range(13):
+        yy, mm = y, m - j
+        while mm <= 0:
+            yy, mm = yy - 1, mm + 12
+        keys.append(f"{yy}{mm:02d}")
+    ests = [est12(h, k) for k in keys]
+    out = {"est_hist": [[k, round(e)] for k, e in zip(reversed(keys), reversed(ests)) if e]}
+    if ests[0]:
+        out["est12"] = round(ests[0])
+        if ests[1]:
+            out["rev_rev1"] = round((ests[0] / ests[1] - 1) * 100, 2)
+        if ests[3]:
+            out["rev_rev3"] = round((ests[0] / ests[3] - 1) * 100, 2)
+        n = 0
+        for j in range(12):
+            if ests[j] and ests[j + 1] and ests[j] > ests[j + 1]:
+                n += 1
+            else:
+                break
+        out["rev_up_n"] = n
+    return out
+
+
+def update_confs(confs: dict):
+    """公開資訊觀測站「法人說明會一覽表」：本月與下月、上市與上櫃 → {代號: [[日期, 摘要, 簡報連結], ...]}"""
+    today = datetime.now(TW).date()
+    got = 0
+    for dm in (0, 1):
+        y, m = today.year, today.month + dm
+        if m > 12:
+            y, m = y + 1, 1
+        for typek in ("sii", "otc"):
+            data = {"encodeURIComponent": "1", "step": "1", "firstin": "1", "off": "1", "TYPEK": typek,
+                    "year": str(y - 1911), "month": f"{m:02d}", "co_id": ""}
+            try:
+                time.sleep(2)
+                r = S.post("https://mopsov.twse.com.tw/mops/web/ajax_t100sb02_1", data=data, timeout=40)
+                html = r.content.decode("utf-8", errors="ignore")
+            except Exception as e:
+                probe["errors"].append(f"confs {typek} {y}{m}: {e}"[:200])
+                continue
+            probe["calls"].setdefault("confs_" + typek, {"status": r.status_code, "len": len(html), "head": re.sub(r"\s+", " ", html[:400])})
+            for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, flags=re.S | re.I):
+                tds = re.findall(r"<td[^>]*>(.*?)</td>", tr, flags=re.S | re.I)
+                txt = [re.sub(r"<[^>]+>|&nbsp;", " ", x).strip() for x in tds]
+                if len(txt) < 4 or not re.fullmatch(r"\d{4}", txt[0]):
+                    continue
+                dm_ = re.search(r"(\d{2,3})/(\d{1,2})/(\d{1,2})", " ".join(txt[2:4]))
+                if not dm_:
+                    continue
+                d = f"{int(dm_.group(1)) + 1911}{int(dm_.group(2)):02d}{int(dm_.group(3)):02d}"
+                link = re.search(r'href="([^"]+\.pdf)"', tr, flags=re.I)
+                summ = max(txt[3:], key=len)[:120]
+                lst = confs.setdefault(txt[0], [])
+                if not any(x[0] == d for x in lst):
+                    lst.append([d, summ, ("https://mopsov.twse.com.tw" + link.group(1)) if link and link.group(1).startswith("/") else (link.group(1) if link else "")])
+                    got += 1
+    cut = (today - timedelta(days=120)).strftime("%Y%m%d")
+    for c in list(confs):
+        confs[c] = sorted(x for x in confs[c] if x[0] >= cut)[-6:]
+        if not confs[c]:
+            del confs[c]
+    probe["calls"]["confs"] = {"ok": got > 0, "new": got, "companies": len(confs)}
+
+
+NEWS_Q = {"up": ["調升目標價", "上調目標價", "目標價上調", "上修財測", "EPS上修", "獲利上修", "調高財測"],
+          "down": ["調降目標價", "下調目標價", "目標價下修", "下修財測", "獲利下修", "調低財測"]}
+
+
+def update_news(news: dict, names: dict):
+    """Google 新聞 RSS（只抓標題）：找出「調升目標價、上修財測」等新聞提到的股票。只當參考，不計分"""
+    from email.utils import parsedate_to_datetime
+    nm = sorted(((n, c) for c, n in names.items() if is_stock(c) and len(n) >= 2), key=lambda x: -len(x[0]))
+    got = 0
+    for typ, qs in NEWS_Q.items():
+        for q in qs:
+            try:
+                time.sleep(1.5)
+                r = S.get("https://news.google.com/rss/search", params={"q": f"{q} when:7d", "hl": "zh-TW", "gl": "TW", "ceid": "TW:zh-Hant"}, timeout=30)
+                xml = r.content.decode("utf-8", errors="ignore")
+            except Exception as e:
+                probe["errors"].append(f"news {q}: {e}"[:200])
+                continue
+            for it in re.findall(r"<item>(.*?)</item>", xml, flags=re.S):
+                t = re.search(r"<title>(.*?)</title>", it, flags=re.S)
+                ln = re.search(r"<link>(.*?)</link>", it, flags=re.S)
+                pd = re.search(r"<pubDate>(.*?)</pubDate>", it, flags=re.S)
+                if not t:
+                    continue
+                title = re.sub(r"<!\[CDATA\[|\]\]>", "", t.group(1)).replace("&amp;", "&").strip()
+                try:
+                    d = parsedate_to_datetime(pd.group(1)).astimezone(TW).strftime("%Y%m%d") if pd else ymd(datetime.now(TW).date())
+                except Exception:
+                    d = ymd(datetime.now(TW).date())
+                hit = next((c for n, c in nm if n in title), None)
+                if not hit:
+                    continue
+                lst = news.setdefault(hit, [])
+                if not any(x[2] == title for x in lst):
+                    lst.append([d, typ, title, ln.group(1).strip() if ln else ""])
+                    got += 1
+    cut = ymd(datetime.now(TW).date() - timedelta(days=120))
+    for c in list(news):
+        news[c] = sorted(x for x in news[c] if x[0] >= cut)[-12:]
+        if not news[c]:
+            del news[c]
+    probe["calls"]["news"] = {"ok": got >= 0, "new": got, "companies": len(news)}
+
+
+def theme_stats(themes: dict, stocks: list, qf_latest):
+    """趨勢 → 環節：用營收成長、創新高比例、動能、預估上修比例排出哪一環最強；每環龍頭 = 市值最大"""
+    S_ = {x["c"]: x for x in stocks}
+    shares = {c: v[1] for c, v in ((qf_latest or {}).get("data") or {}).items() if v and len(v) > 1 and v[1]}
+    med = lambda xs: sorted(xs)[len(xs) // 2] if xs else None
+    out = {}
+    for th, segs in themes.items():
+        if th.startswith("_"):
+            continue
+        rows = []
+        for seg, codes in segs.items():
+            mem = [S_[c] for c in codes if c in S_]
+            if not mem:
+                continue
+            g = lambda k: [x["m"][k] for x in mem if x["m"].get(k) is not None]
+            for x in mem:
+                if x["c"] in shares and x["m"].get("p"):
+                    x["m"]["cap"] = round(shares[x["c"]] * x["m"]["p"])
+            lead = max(mem, key=lambda x: x["m"].get("cap") or (x["m"].get("avgval") or 0) * 1000)
+            rh, up = g("rev_hi"), g("rev_up_n")
+            rows.append({"seg": seg, "n": len(mem), "codes": [x["c"] for x in mem], "lead": lead["c"],
+                         "rev3": med(g("rev3")), "accel": med(g("accel")), "rev_rev3": med(g("rev_rev3")),
+                         "hi_pct": round(sum(x >= 0 for x in rh) / len(rh) * 100) if rh else None,
+                         "up_pct": round(sum(x >= 2 for x in up) / len(up) * 100) if up else None,
+                         "score": round(sum(x["s"]["score"] for x in mem if x["s"].get("score") is not None) /
+                                        max(1, sum(1 for x in mem if x["s"].get("score") is not None)), 1),
+                         "b60": med(g("b60"))})
+        # 環節分數：四項各自在環節間排名後加權
+        keys = {"rev3": .30, "hi_pct": .25, "accel": .20, "up_pct": .25}
+        rk = {k: pct_rank({r["seg"]: r[k] for r in rows}) for k in keys}
+        for r in rows:
+            parts = [(rk[k][r["seg"]], w) for k, w in keys.items() if r["seg"] in rk[k]]
+            tw = sum(w for _, w in parts)
+            r["seg_score"] = round(sum(v * w for v, w in parts) / tw * 100, 1) if tw else None
+        rows.sort(key=lambda r: -(r["seg_score"] or 0))
+        out[th] = rows
+    return out
 
 
 def roc_to_ymd(s):
@@ -725,7 +903,12 @@ def fetch_fundamentals(old):
                 continue
             revenue = num(pick(r, "營業收入", exclude=("營業收入淨額以外",)))
             gross = num(pick(r, "營業毛利（毛損）淨額", "營業毛利（毛損）", "營業毛利"))
+            op = num(pick(r, "營業利益", exclude=("率",)))
+            yq = f"{pick(r, '年度', 'Year')}Q{int(num(pick(r, '季別', 'Season')) or 0)}"
+            if revenue:
+                fund.setdefault("inc_hist", {}).setdefault(code, {})[yq] = [revenue, op, gross]
             inc[code] = {
+                "rev": revenue, "op": op,
                 "y": pick(r, "年度", "Year"), "q": num(pick(r, "季別", "Season")),
                 "eps": num(pick(r, "基本每股盈餘")),
                 "ni": num(pick(r, "淨利（淨損）歸屬於母公司業主", "歸屬於母公司業主")),
@@ -957,7 +1140,8 @@ def combine(ranks: dict, weights: dict, code: str):
     return round(s / w * 100, 1) if w >= 0.3 else None
 
 
-def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores, tdcc=None, qf_latest=None):
+def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores, tdcc=None, qf_latest=None,
+                 news=None, confs=None, themes=None):
     pdates = sorted(prices)
     tdates = sorted(t86)
     if not pdates:
@@ -970,6 +1154,8 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
 
     metrics = {}
     vp_cache = {}
+    est_cache = {}
+    riv_cache = {}
     otc_now = set(OTC_LATEST["codes"]) or OTC_CODES
     for code, row in prices[last].items():
         close = row[0]
@@ -1010,6 +1196,18 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
             m["rev_ym"] = r["ym"]
         m.update({k: v for k, v in revenue_metrics(fund.get("rev_hist", {}).get(code, {})).items()
                   if v is not None})
+        rv = revision_metrics(fund.get("rev_hist", {}).get(code, {}))
+        est_cache[code] = rv.pop("est_hist", None)
+        m.update(rv)
+        ih = (fund.get("inc_hist") or {}).get(code) or {}
+        if ih:
+            ks = sorted(ih)
+            a = ih[ks[-1]]
+            if a[0] and a[1] is not None:
+                m["opm"] = round(a[1] / a[0] * 100, 2)          # 營業利益率（今年累計）
+                m["opm_q"] = ks[-1]
+                if len(ks) >= 2 and ih[ks[-2]][0] and ih[ks[-2]][1] is not None:
+                    m["opm_chg"] = round(m["opm"] - ih[ks[-2]][1] / ih[ks[-2]][0] * 100, 2)
         i = inc.get(code)
         if i:
             m["eps"], m["eps_q"], m["gm"] = i["eps"], i["q"], i["gm"]
@@ -1051,6 +1249,27 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
                     m["fpe_pos"] = round(sum(1 for h in hist_pe if h < m["fpe"]) / len(hist_pe) * 100, 1)
         if m.get("pe") and m["pe"] > 0 and m.get("rev3") is not None:
             m["peg"] = round(m["rev3"] / m["pe"], 3)       # 成長性價比：近 3 月營收年增 ÷ 本益比
+        # 第二步：本益比位階（標準差）。歷史本益比取對數後算平均、標準差。
+        # 位階用「目前本益比 vs 歷史本益比」（同樣是近四季 EPS，才公平）；預估本益比的位階另列參考
+        # （成長股的預估本益比一定比歷史低，直接拿來比會全部顯示便宜）
+        if hist_pe and m.get("pe") and m["pe"] > 0:
+            import math as _m
+            for lab, n in (("", 60), ("3", 36)):
+                hp = [_m.log(x) for x in hist_pe[-n:] if x and x > 0]
+                if len(hp) >= 24:
+                    mu = sum(hp) / len(hp)
+                    sd = (sum((x - mu) ** 2 for x in hp) / len(hp)) ** 0.5
+                    if sd > 0:
+                        m["pe_z" + lab] = round((_m.log(m["pe"]) - mu) / sd, 2)
+                        if lab == "":
+                            riv_cache[code] = (mu, sd)
+                            m["pe_pct"] = round(sum(1 for x in hp if x < _m.log(m["pe"])) / len(hp) * 100)
+                            m["pe_mean"] = round(_m.exp(mu), 1)
+                            if m.get("fpe"):
+                                m["fpe_z"] = round((_m.log(m["fpe"]) - mu) / sd, 2)
+            z = m.get("pe_z")
+            if z is not None:
+                m["pe_zone"] = "cheap" if z < -0.5 else "rich" if z > 0.5 else "fair"
         pos = m.get("fpe_pos", m.get("pe_pos"))
         if pos is not None:
             m["val_cheap"] = -pos
@@ -1063,6 +1282,13 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
                 old = tdcc[tk[-5]].get(code) if len(tk) >= 5 else None
                 if old:
                     m["big400_chg"] = round(cur[0] - old[0], 2)
+        nw = (news or {}).get(code) or []
+        cut30 = ymd(datetime.now(TW).date() - timedelta(days=30))
+        m["news_up"] = sum(1 for x in nw if x[0] >= cut30 and x[1] == "up") or None
+        m["news_dn"] = sum(1 for x in nw if x[0] >= cut30 and x[1] == "down") or None
+        cf = [x for x in ((confs or {}).get(code) or []) if x[0] >= ymd(datetime.now(TW).date())]
+        if cf:
+            m["conf_next"] = cf[0][0]
         m["liquid"] = avg_val >= MIN_AVG_VALUE
         metrics[code] = m
 
@@ -1212,6 +1438,14 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
                 rp.append(m["p"])
                 re_.append(m["feps"])
             det["river"] = {"m": rm, "p": rp, "e": re_, "q": qs}
+            if code in riv_cache:
+                import math as _m
+                mu, sd = riv_cache[code]
+                det["river"]["q"] = [round(_m.exp(mu + k * sd), 2) for k in (-1, -0.5, 0, 0.5, 1)]
+                det["river"]["z"] = [-1, -0.5, 0, 0.5, 1]
+        det["est"] = est_cache.get(code)
+        det["news"] = (news or {}).get(code)
+        det["confs"] = (confs or {}).get(code)
         sd = [d for d in sdates if code in scores[d]]
         det["sc"] = {"d": sd, "score": [scores[d][code] for d in sd]}
         h = rev_hist.get(code, {})
@@ -1233,6 +1467,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
         "stocks": stocks,
         "etfs": etfs,
         "rules": RULES,
+        "themes": theme_stats(themes or {}, stocks, qf_latest),
         "picks": {rid: top_picks([(x["c"], x["m"]) for x in stocks], rid) for rid in RULES},
     }
 
@@ -1298,9 +1533,12 @@ def main():
             bw_latest["data"].update(res)
             log(f"  上櫃本益比 {bw_latest['date']} ok ({len(res)})")
     log("== 外資持股比例")
-    if prices and qf_latest.get("date") != max(prices):
+    if prices:
+        _TWSE_CODES[:] = [c for c in prices[max(prices)] if c not in OTC_CODES]
+    tw_n = sum(1 for c in (qf_latest.get("data") or {}) if c in set(_TWSE_CODES))
+    if prices and (qf_latest.get("date") != max(prices) or tw_n < 500):
         for k in sorted(prices, reverse=True)[:3]:
-            if qf_latest.get("date") and qf_latest["date"] >= k:
+            if qf_latest.get("date") and qf_latest["date"] > k and tw_n >= 500:
                 break
             res = fetch_qfii(datetime.strptime(k, "%Y%m%d").date())
             if res:
@@ -1316,6 +1554,14 @@ def main():
     update_pe_monthly(pe_monthly, otc_nd["pe"])
     log("== 加權指數")
     update_index(index)
+    log("== 法說會行事曆")
+    confs = load("confs.json", {})
+    update_confs(confs)
+    save("confs.json", confs)
+    log("== 新聞（法人調升目標價、上修財測）")
+    news = load("news.json", {})
+    update_news(news, names)
+    save("news.json", news)
     log("== 集保大戶持股（每週）")
     update_tdcc(tdcc)
     save("tdcc.json", tdcc)
@@ -1341,7 +1587,8 @@ def main():
     save("meta.json", meta)
     save("fundamentals.json", fund)
 
-    out = build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores, tdcc, qf_latest)
+    out = build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores, tdcc, qf_latest,
+                       news, confs, load("themes.json", {}))
     save("index.json", index)
     save("scores.json", scores)
     save("fundamentals.json", fund)

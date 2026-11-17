@@ -329,3 +329,5 @@ h1 { letter-spacing: .5px; }
 }
 .mk { font-size: 10px; margin-left: 4px; padding: 0 5px; border-radius: 999px; vertical-align: 1px;
   color: var(--text-secondary); border: 1px solid var(--glass-border); background: var(--glass); }
+tr.sel { background: rgba(42, 120, 214, .14); }
+#page td .chip { font-size: 12px; padding: 1px 8px; }

@@ -39,6 +39,10 @@ const F = {
   value: { t: "估值（參考，不計分）", short: "估值*", g: (s) => s.s.value, kind: "bar", grp: "分數" },
   sup: { t: "支撐位置（參考，不計分）", short: "支撐*", g: (s) => s.s.sup, kind: "bar", grp: "分數" },
   fund: { t: "營收成長分數", short: "營收", g: (s) => s.s.fund, kind: "bar", grp: "分數" },
+  rev_up_n: { t: "營收預估連續上修月數", short: "連續上修", g: (s) => s.m.rev_up_n, kind: "num0", grp: "營收" },
+  rev_rev3: { t: "營收預估近 3 個月上修 %", short: "3月上修", g: (s) => s.m.rev_rev3, kind: "signed1", grp: "營收" },
+  pe_z: { t: "本益比位階 σ（< −0.5 便宜、> +0.5 偏貴）", short: "位階σ", g: (s) => s.m.pe_z, kind: "signed", suf: "", grp: "價值" },
+  opm: { t: "營業利益率 %（今年累計）", short: "營益率", g: (s) => s.m.opm, kind: "num1", suf: "%", grp: "獲利" },
   rev_hi: { t: "最新月營收距前 12 月最高 %（≥ 0 = 創新高）", short: "營收距高", g: (s) => s.m.rev_hi, kind: "signed1", grp: "營收" },
   chip: { t: "外資持股分數", short: "外資持股", g: (s) => s.s.chip, kind: "bar", grp: "分數" },
   qf: { t: "外資持股比例 %", short: "外資持股%", g: (s) => s.m.qf, kind: "num1", suf: "%", grp: "籌碼" },
@@ -93,8 +97,8 @@ const TABCOLS = {
   pick: ["p", "chg", "b20", "score", "streak", "rev_hi", "accel", "pe", "f20", "avgval", "vpos"],
   win: ["p", "chg", "b20", "score", "d5", "fund", "liq", "peg", "chip", "value"],
   value: ["p", "yld", "pe", "fpe", "vpos", "sup_dist", "accel", "score"],
-  watch: ["p", "chg", "b20", "score", "d5", "streak", "rev_hi", "accel", "f20", "avgval", "vpos"],
-  screen: ["p", "chg", "score", "d5", "fpe", "vpos", "sup_dist", "vsup_dist", "rev_hi", "accel", "roe", "f20", "t20"],
+  watch: ["p", "chg", "b20", "score", "d5", "rev_up_n", "rev_rev3", "rev_hi", "accel", "pe_z", "avgval"],
+  screen: ["p", "chg", "score", "d5", "rev_up_n", "rev_rev3", "rev_hi", "accel", "opm", "pe_z", "fpe", "sup_dist", "qf"],
 };
 const DEFAULT_SORT = { pick: [null, false], win: ["score", false], value: ["score", false], watch: ["score", false], screen: ["score", false] };
 const HIDE_SM = new Set(["b60", "peg", "rev_hi", "pe", "chg", "value", "sup", "fund", "chip", "tech", "liq", "streak", "rev3", "avgval", "vpos", "sup_dist", "accel", "pb", "pe", "d5", "roe", "f20", "t20", "rev_yoy", "vsup_dist", "r20"]);
@@ -114,6 +118,9 @@ const PRESETS = {
   river_cheap: { t: "河流圖便宜區（預估位階 ≤ 20%）", f: { vpos: [null, 20] } },
   score80: { t: "綜合分數 ≥ 80（回測勝率最高的區間）", f: { score: [80, null] } },
   rev_high: { t: "營收創 12 個月新高", f: { rev_hi: [0, null] } },
+  upgrade: { t: "營收預估連續上修 ≥ 3 個月", f: { rev_up_n: [3, null] } },
+  upgrade_cheap: { t: "連續上修 ≥ 2 個月＋本益比位階便宜（< −0.5σ）", f: { rev_up_n: [2, null], pe_z: [null, -0.5] } },
+  upgrade_fair: { t: "連續上修 ≥ 2 個月＋本益比不貴（≤ +0.5σ）", f: { rev_up_n: [2, null], pe_z: [null, 0.5] } },
   foreign: { t: "外資大買", f: { f20: [5, null] } },
   quality: { t: "高 ROE＋高毛利", f: { roe: [15, null], gm: [30, null] } },
   score_up: { t: "5 日分數大進步", f: { d5: [10, null] } },
@@ -421,6 +428,50 @@ function renderETF() {
   });
 }
 
+// ---------- 第一步：趨勢地圖（趨勢 → 環節 → 龍頭 → 是否上修 → 本益比位階）
+const ZONE = { cheap: ["good", "便宜"], fair: ["neutral", "合理"], rich: ["warn", "偏貴"] };
+const zoneTag = (m) => m.pe_zone ? `<span class="chip ${ZONE[m.pe_zone][0]}" title="本益比在自己 5 年歷史的 ${m.pe_z > 0 ? "+" : ""}${m.pe_z}σ，過去 ${m.pe_pct}% 的時間比現在便宜">${ZONE[m.pe_zone][1]} ${m.pe_z > 0 ? "+" : ""}${m.pe_z}σ</span>` : NA;
+const upTag = (m) => m.rev_up_n == null ? NA : m.rev_up_n >= 3 ? `<span class="chip good">連續上修 ${m.rev_up_n} 月</span>` :
+  m.rev_up_n >= 1 ? `<span class="chip neutral">上修 ${m.rev_up_n} 月</span>` : '<span class="chip warn">本月下修</span>';
+function renderTrend() {
+  const all = state.data.themes || {};
+  const names = Object.keys(all);
+  if (!names.length) { $("#page").innerHTML = '<div class="how"><p>趨勢資料還沒產生（下次每日更新後出現）。</p></div>'; return; }
+  const th = state.theme && all[state.theme] ? state.theme : names[0];
+  const rows = all[th];
+  const S = Object.fromEntries(state.data.stocks.map((s) => [s.c, s]));
+  const open = state.segOpen ?? rows[0]?.seg;
+  const seg = rows.find((r) => r.seg === open);
+  const arrow = (r) => r.accel == null ? "" : r.accel > 5 ? '<span class="up">▲ 加速</span>' : r.accel < -5 ? '<span class="down">▼ 放緩</span>' : "持平";
+  const mem = seg ? seg.codes.map((c) => S[c]).filter(Boolean).sort((a, b) => (b.s.score ?? 0) - (a.s.score ?? 0)) : [];
+  $("#page").innerHTML = `
+    <div class="filters"><span class="seg" id="themeSeg">${names.map((n) => `<button data-t="${esc(n)}" class="${n === th ? "on" : ""}">${esc(n)}</button>`).join("")}</span>
+      <span class="note">第一步：找出趨勢裡最強的環節 → 環節龍頭 → 確認營收預估在上修 → 第二步看本益比位階</span></div>
+    <div class="tablebox"><table><thead><tr><th class="l">環節（點選看成員）</th><th>環節分數</th><th>近3月營收年增</th><th>營收創新高</th><th>預估連續上修≥2月</th><th>營收動能</th><th>距季線</th><th class="l">龍頭</th></tr></thead>
+      <tbody>${rows.map((r, i) => { const L = S[r.lead]; return `<tr data-seg="${esc(r.seg)}" class="${r.seg === open ? "sel" : ""}">
+        <td class="l"><b>${i + 1}. ${esc(r.seg)}</b> <span class="na">${r.n} 家</span></td><td>${bar(r.seg_score)}</td>
+        <td>${signed(r.rev3, 0)}</td><td>${r.hi_pct ?? "—"}%</td><td>${r.up_pct ?? "—"}%</td><td>${signed(r.accel, 1, "")} ${arrow(r)}</td><td>${signed(r.b60, 1)}</td>
+        <td class="l">${L ? `<a href="#${L.c}" data-open="${L.c}">${esc(L.n)}</a> ${upTag(L.m)} ${zoneTag(L.m)}` : "—"}</td></tr>`; }).join("")}</tbody></table></div>
+    ${seg ? `<h3 style="margin:16px 0 6px">${esc(seg.seg)}：成員（依分數排序）</h3>
+    <div class="tablebox"><table><thead><tr><th class="starc"></th><th class="l">股票</th><th>分數</th><th class="l">營收預估</th><th>近3月上修</th><th>近3月營收年增</th><th>營收距高點</th><th>營業利益率</th><th class="l">本益比位階（第二步）</th><th class="l">消息</th></tr></thead>
+      <tbody>${mem.map((s) => { const m = s.m; return `<tr data-c="${s.c}">
+        <td class="starc"><button class="star ${state.watch.has(s.c) ? "on" : ""}" data-star="${s.c}">${state.watch.has(s.c) ? "★" : "☆"}</button></td>
+        <td class="l"><span class="code">${s.c}</span>${esc(s.n)}${s.c === seg.lead ? ' <span class="flag good">龍頭</span>' : ""}${m.over ? ' <span class="flag warn">過熱</span>' : ""}</td>
+        <td>${s.s.score != null ? `<span class="total">${s.s.score.toFixed(0)}</span>` : NA}</td><td class="l">${upTag(m)}</td><td>${signed(m.rev_rev3, 1)}</td>
+        <td>${signed(m.rev3, 0)}</td><td>${signed(m.rev_hi, 1)}</td><td>${m.opm != null ? fmt(m.opm, 1, "%") + (m.opm_chg != null ? ` <span class="na">(${m.opm_chg > 0 ? "+" : ""}${m.opm_chg})</span>` : "") : NA}</td>
+        <td class="l">${zoneTag(m)}</td>
+        <td class="l">${m.news_up ? `<span class="chip good">法人上調 ${m.news_up}</span>` : ""}${m.news_dn ? ` <span class="chip warn">下調 ${m.news_dn}</span>` : ""}${m.conf_next ? ` <span class="chip neutral">法說 ${md(m.conf_next)}</span>` : ""}</td></tr>`; }).join("")}</tbody></table></div>` : ""}
+    <p class="note"><b>環節分數</b> = 各環節間比較：近 3 月營收年增中位數 30%、營收創 12 個月新高的比例 25%、營收動能 20%、營收預估連續上修 ≥ 2 個月的比例 25%。<br>
+      <b>營收預估</b> = 用最新月營收推算「未來 12 個月營收」，每月重算；比上個月高就是上修。這是從營收外推，不是法人預估，會比法人慢 1~2 個月，但不受業外一次性收益影響。<br>
+      <b>本益比位階</b> = 目前本益比在自己 5 年本益比歷史（取對數）的標準差位置：&lt; −0.5σ 便宜、−0.5σ ~ +0.5σ 合理、&gt; +0.5σ 偏貴。
+      用「近四季 EPS」的本益比和歷史比才公平；預估本益比對成長股一定偏低，只在個股頁列為參考。<br>
+      <b>營業利益率</b> = 最新季報（今年累計），括號為與上一份季報相比的變化；季報歷史從現在開始累積。<b>消息</b> = 近 30 天新聞標題提到「調升目標價、上修財測」等（Google 新聞），以及即將召開的法說會。<br>
+      成員名單是人工整理的初版（data/themes.json），可能有遺漏；不是經過回測驗證的選股策略。</p>`;
+  $("#themeSeg").onclick = (e) => { const b = e.target.closest("button"); if (b) { state.theme = b.dataset.t; state.segOpen = null; renderTrend(); } };
+  $$("tr[data-seg]").forEach((tr) => tr.onclick = (e) => { if (e.target.closest("a")) return; state.segOpen = tr.dataset.seg; renderTrend(); });
+  $$("#page tr[data-c]").forEach((tr) => tr.onclick = (e) => { if (e.target.closest("a,button")) return; showDetail(tr.dataset.c); });
+}
+
 // ---------- 回測
 function renderBacktest() {
   const bt = state.bt;
@@ -538,6 +589,7 @@ function render() {
   if (t === "pick") renderRuleInfo();
   if (isList) renderTable();
   else if (t === "etf") renderETF();
+  else if (t === "trend") renderTrend();
   else if (t === "ind") renderIndustries();
   else if (t === "bt") renderBacktest();
   else renderHow();
@@ -605,7 +657,9 @@ async function showDetail(code) {
     <h3>法人買賣超（張）
       <span class="seg" id="segT86"><button data-k="f" class="on">外資</button><button data-k="i">投信</button><button data-k="s">自營商</button><button data-k="all">合計</button></span></h3>
     <div id="chT86" class="chartbox"></div>
-    <h3>本益比河流圖</h3><div id="chRiver" class="chartbox"></div>
+    <h3>營收預估修正（第一步）</h3><div id="chEst" class="chartbox"></div>
+    <div id="newsBox"></div>
+    <h3>本益比河流圖（第二步：標準差位階）</h3><div id="chRiver" class="chartbox"></div>
     <h3>月營收</h3><div id="chRev" class="chartbox"></div>
     <h3>分數走勢</h3><div id="chScore" class="chartbox"></div>
 
@@ -642,7 +696,9 @@ async function showDetail(code) {
         <table class="kv">
           ${kv("本益比", fmt(m.pe, 1, " 倍"))}
           ${kv("預估本益比（Forward）", m.fpe != null ? `${fmt(m.fpe, 1, " 倍")}<br><span class="note">預估 EPS ${m.feps}（成長 ${m.fg > 0 ? "+" : ""}${m.fg}%）</span>` : '<span class="na">不適用</span>')}
-          ${kv("預估本益比位階", m.fpe_pos != null ? fmt(m.fpe_pos, 0, "%") : NA)}
+          ${kv("本益比位階（σ）", m.pe_z != null ? `${zoneTag(m)}<br><span class="note">目前 ${fmt(m.pe, 1)} 倍、5 年平均 ${m.pe_mean} 倍；過去 ${m.pe_pct}% 的時間比現在便宜；3 年 ${m.pe_z3 != null ? (m.pe_z3 > 0 ? "+" : "") + m.pe_z3 + "σ" : "—"}${m.fpe_z != null ? `；用預估 EPS 算 ${m.fpe_z > 0 ? "+" : ""}${m.fpe_z}σ（成長股一定偏低，僅參考）` : ""}</span>` : NA)}
+          ${kv("營業利益率（今年累計）", m.opm != null ? `${fmt(m.opm, 1, "%")}${m.opm_chg != null ? `（比上一份季報 ${signed(m.opm_chg, 2, " 個百分點")}）` : ""}<br><span class="note">${esc(m.opm_q || "")}</span>` : NA)}
+          ${kv("預估本益比位階（百分位）", m.fpe_pos != null ? fmt(m.fpe_pos, 0, "%") : NA)}
           ${kv("本益比位階", m.pe_pos != null ? `${m.pe_pos.toFixed(0)}%（5 年 ${m.pe_lo.toFixed(1)}~${m.pe_hi.toFixed(1)} 倍）` : NA)}
           ${kv("殖利率", fmt(m.yld, 2, "%"))}
           ${kv("股價淨值比", fmt(m.pb))}
@@ -678,6 +734,8 @@ async function showDetail(code) {
     $$("#segT86 button").forEach((b) => b.classList.toggle("on", b === e.target));
     drawT86(det, k);
   };
+  drawEst(det, m);
+  drawNews(det);
   drawRiver(det, m);
   drawRev(det);
   drawScore(det);
@@ -724,6 +782,11 @@ function signals(s) {
   if (d5 >= 10) out.push(["good", "近 5 日分數大幅進步"]);
   if (d5 <= -10) out.push(["warn", "近 5 日分數大幅退步"]);
   if (m.rev_hi != null && m.rev_hi >= 0) out.push(["good", "月營收創 12 個月新高"]);
+  if (m.rev_up_n >= 3) out.push(["good", `營收預估連續上修 ${m.rev_up_n} 個月`]);
+  else if (m.rev_up_n === 0) out.push(["warn", "營收預估本月下修"]);
+  if (m.pe_zone) out.push([ZONE[m.pe_zone][0], `本益比位階${ZONE[m.pe_zone][1]}（${m.pe_z > 0 ? "+" : ""}${m.pe_z}σ）`]);
+  if (m.news_up) out.push(["good", `近 30 天法人上調 ${m.news_up} 則`]);
+  if (m.news_dn) out.push(["warn", `近 30 天法人下調 ${m.news_dn} 則`]);
   return out;
 }
 
@@ -773,22 +836,45 @@ function drawRiver(det, m) {
   if (!r) { $("#chRiver").innerHTML = '<p class="note">本益比歷史不足 24 個月，或公司虧損沒有本益比，無法畫河流圖。</p>'; return; }
   const n = r.m.length;
   const lines = r.q.map((q) => r.e.map((e) => +(q * e).toFixed(2)));
+  const zl = (i) => r.z ? `${r.z[i] > 0 ? "+" : ""}${r.z[i]}σ ${r.q[i]}倍` : `${r.q[i]}倍`;
   const lbl = r.m.map((k) => k === "F" ? "預估" : `${k.slice(0, 4)}/${k.slice(4, 6)}`);
   Charts.line($("#chRiver"), {
     labels: lbl, height: 260,
     xlabels: lbl.map((l, i) => r.m[i] === "F" ? "預估" : (r.m[i].slice(4, 6) === "01" ? l.slice(0, 4) : "")),
     bands: [0, 1, 2, 3].map((i) => ({ lo: lines[i], hi: lines[i + 1], cls: "b" + (i + 1),
-      name: `${r.q[i]}~${r.q[i + 1]} 倍` })),
+      name: r.z ? ["−1σ~−0.5σ（便宜）", "−0.5σ~平均", "平均~+0.5σ", "+0.5σ~+1σ（偏貴）"][i] : `${r.q[i]}~${r.q[i + 1]} 倍` })),
     series: [
-      ...lines.map((l, i) => ({ values: l, cls: "qline", endLabel: `${r.q[i]}倍` })),
+      ...lines.map((l, i) => ({ values: l, cls: "qline", endLabel: zl(i) })),
       { name: "股價", values: r.p, cls: "s-price" },
     ],
     tip: (i) => `<b>${r.m[i] === "F" ? "預估（未來 12 個月 EPS）" : lbl[i]}</b><br>股價 ${r.p[i]}<br>${r.m[i] === "F" ? "預估本益比" : "本益比"} ${(r.p[i] / r.e[i]).toFixed(1)} 倍<br>${r.m[i] === "F" ? "預估 EPS" : "近四季 EPS"} ≈ ${r.e[i].toFixed(2)}<br>` +
-      r.q.map((q, k) => `${q} 倍 → ${lines[k][i]}`).reverse().join("<br>"),
+      r.q.map((q, k) => `${r.z ? zl(k) : q + " 倍"} → ${lines[k][i]}`).reverse().join("<br>"),
   });
-  const last = r.p[n - 1], e = r.e[n - 1], isF = r.m[n - 1] === "F";
-  const zone = last < r.q[0] * e ? "最下緣（歷史 10% 以下）" : last < r.q[1] * e ? "偏低區" : last < r.q[3] * e ? "中間區" : last < r.q[4] * e ? "偏高區" : "最上緣（歷史 90% 以上）";
-  $("#chRiver").insertAdjacentHTML("beforeend", `<p class="note">${isF ? "以預估 EPS 計算，" : ""}目前股價落在河流的<b>${zone}</b>。歷史 EPS 由「收盤價 ÷ 本益比」反推（近四季合計）；最右邊「預估」點 = 近四季 EPS ×（1 + 營收成長率），假設利潤率不變。</p>`);
+  const li = r.z && r.m[n - 1] === "F" ? n - 2 : n - 1;      // 位階用近四季 EPS 那一點（和歷史同基準）
+  const last = r.p[li], e = r.e[li], isF = r.m[li] === "F";
+  const zone = r.z ? (last < r.q[1] * e ? "便宜區（< −0.5σ）" : last <= r.q[3] * e ? "合理區（±0.5σ）" : "偏貴區（> +0.5σ）")
+    : last < r.q[0] * e ? "最下緣（歷史 10% 以下）" : last < r.q[1] * e ? "偏低區" : last < r.q[3] * e ? "中間區" : last < r.q[4] * e ? "偏高區" : "最上緣（歷史 90% 以上）";
+  $("#chRiver").insertAdjacentHTML("beforeend", `<p class="note">${isF ? "以預估 EPS 計算，" : ""}目前股價落在河流的<b>${zone}</b>。${r.z ? "各條線 = 5 年本益比（取對數）的平均 ±0.5σ、±1σ。" : ""}歷史 EPS 由「收盤價 ÷ 本益比」反推（近四季合計）；最右邊「預估」點 = 近四季 EPS ×（1 + 營收成長率），假設利潤率不變。</p>`);
+}
+
+function drawEst(det, m) {
+  const e = det.est;
+  if (!e || e.length < 2) { $("#chEst").innerHTML = '<p class="note">營收歷史不足，無法推估。</p>'; return; }
+  Charts.line($("#chEst"), {
+    labels: e.map((x) => rocYm(x[0]).slice(2)), height: 170,
+    series: [{ name: "未來 12 個月營收預估（億）", values: e.map((x) => +(x[1] / 1e5).toFixed(1)), cls: "s-1" }],
+    tip: (i) => `<b>${rocYm(e[i][0])} 營收公布後</b><br>未來 12 個月營收預估 ${(e[i][1] / 1e5).toFixed(1)} 億${i ? `<br>比上個月 ${signed((e[i][1] / e[i - 1][1] - 1) * 100, 1)}` : ""}`,
+  });
+  $("#chEst").insertAdjacentHTML("beforeend", `<p class="note">${m.rev_up_n != null ? `已連續上修 <b>${m.rev_up_n}</b> 個月；近 3 個月上修 ${signed(m.rev_rev3, 1)}。` : ""}每月新營收公布後，用「近 12 個月營收 ×（1 + 近 3 月年增率）」重算一次；線往上 = 營收預估上修。</p>`);
+}
+
+function drawNews(det) {
+  const n = det.news || [], c = det.confs || [];
+  if (!n.length && !c.length) { $("#newsBox").innerHTML = ""; return; }
+  $("#newsBox").innerHTML = `<h3>法說會與法人消息</h3><table class="kv">
+    ${c.map((x) => `<tr><td>${ymdTxt(x[0])} 法說會</td><td>${esc(x[1])} ${x[2] ? `<a href="${esc(x[2])}" target="_blank" rel="noopener">簡報 →</a>` : ""}</td></tr>`).join("")}
+    ${[...n].reverse().map((x) => `<tr><td>${ymdTxt(x[0])} <span class="chip ${x[1] === "up" ? "good" : "warn"}">${x[1] === "up" ? "上調" : "下調"}</span></td><td><a href="${esc(x[3])}" target="_blank" rel="noopener">${esc(x[2])}</a></td></tr>`).join("")}
+  </table><p class="note">新聞來自 Google 新聞標題自動比對（可能誤判）；法說會來自公開資訊觀測站。只當參考，不計分。</p>`;
 }
 
 function drawRev(det) {
@@ -891,7 +977,7 @@ fetch("data/latest.json", { cache: "no-cache" })
     renderMarket();
     renderAdv();
     const qt = new URLSearchParams(location.search).get("tab");
-    setTab(qt && (TABCOLS[qt] || ["etf", "ind", "bt", "how"].includes(qt)) ? qt : "pick");
+    setTab(qt && (TABCOLS[qt] || ["trend", "etf", "ind", "bt", "how"].includes(qt)) ? qt : "pick");
     const c = location.hash.slice(1);
     if (c) showDetail(c);
   })
