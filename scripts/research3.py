@@ -577,6 +577,82 @@ def main():
                 key = f"{name}｜{lab}｜每 {E} 個月"
                 out["threshold"][key] = res = thr_test(cond, per_w, E, K=2)
                 u.log(f"門檻 {key}: " + json.dumps(res, ensure_ascii=False))
+    # ---- 什麼情況下組合比較容易贏 0050：每個月都當起點，持有 3 個月，依進場當下的狀態分組
+    def cond_test(cond, H=3, K=2, MAXN=20):
+        obs = []
+        for n, idx in enumerate(reb[:-H]):
+            t, snap = records[idx]
+            fut = [records[reb[n + j]][1] for j in range(H)]
+            if any(not f.get("__mkt") for f in fut):
+                continue
+            sc = user_score(snap, FUND, None, None)
+            q, cnt, nq = [], {}, 0
+            for c in sorted(sc, key=lambda c: -sc[c]):
+                m = snap[c]
+                if not cond(sc[c], m):
+                    continue
+                nq += 1
+                g = ind_of(c) or "?"
+                if cnt.get(g, 0) >= K or len(q) >= MAXN:
+                    continue
+                cnt[g] = cnt.get(g, 0) + 1
+                q.append(c)
+            rets = []
+            for c in q:
+                g = 1.0
+                for f in fut:
+                    h = (f.get(c) or {}).get("hold")
+                    if h is None:
+                        g = None
+                        break
+                    g *= 1 + h
+                if g is not None:
+                    rets.append(g - 1)
+            if len(rets) < 3:
+                continue
+            mk = 1.0
+            for f in fut:
+                mk *= 1 + f["__mkt"]["hold"]
+            i = di[t]
+            m60 = e[i] / e[i - 60] - 1 if i >= 60 and e[i] and e[i - 60] else None
+            m250 = e[i] / e[i - 250] - 1 if i >= 250 and e[i] and e[i - 250] else None
+            ts = snap.get("2330") or {}
+            avg_sc = sum(sc[c] for c in q) / len(q)
+            ex = sum(rets) / len(rets) - (mk - 1)
+            # 個股層級：組合內有幾成個股贏 0050
+            hit = sum(r > mk - 1 for r in rets) / len(rets)
+            obs.append({"t": t, "ex": ex, "hit": hit, "state": {
+                "大盤多空（0050 在半年線上下）": "多頭" if b.MKT.get(t, {}).get("up120") else "空頭",
+                "0050 近 3 個月漲跌": None if m60 is None else ("跌" if m60 < 0 else "漲 0~10%" if m60 < 0.10 else "漲 > 10%"),
+                "0050 近 1 年漲跌": None if m250 is None else ("跌" if m250 < 0 else "漲 0~25%" if m250 < 0.25 else "漲 > 25%"),
+                "台積電強弱（距季線）": None if ts.get("b60") is None else ("弱（季線下）" if ts["b60"] < 0 else "普通（0~10%）" if ts["b60"] < 10 else "強（> 10%）"),
+                "符合條件的檔數（市場廣度）": "< 15 檔" if nq < 15 else "15~40 檔" if nq <= 40 else "> 40 檔",
+                "入選股平均分數": "< 80" if avg_sc < 80 else "80~88" if avg_sc < 88 else "≥ 88",
+                "進場月份": f"{int(t[4:6])} 月",
+            }})
+        res = {"全部": None}
+        def summ(xs, lab):
+            if not xs:
+                return None
+            exs = [o["ex"] for o in xs]
+            tt = b.nw_t(exs, H - 1) if len(exs) >= 10 else None
+            return {"次數": len(xs), "組合贏 0050 機率": round(sum(x > 0 for x in exs) / len(exs) * 100, 1),
+                    "平均超額（3 個月）": round(sum(exs) / len(exs) * 100, 2), "t": tt and round(tt, 2),
+                    "組合內個股贏 0050 比例": round(sum(o["hit"] for o in xs) / len(xs) * 100, 1),
+                    "2018-2023 次數/勝率": (lambda a: f"{len(a)} / {round(sum(o['ex'] > 0 for o in a) / len(a) * 100) if a else '—'}%")([o for o in xs if o["t"] < SPLIT]),
+                    "2023-2026 次數/勝率": (lambda a: f"{len(a)} / {round(sum(o['ex'] > 0 for o in a) / len(a) * 100) if a else '—'}%")([o for o in xs if o["t"] >= SPLIT])}
+        res["全部"] = summ(obs, "全部")
+        for dim in (obs[0]["state"] if obs else {}):
+            res[dim] = {}
+            for v in sorted({o["state"][dim] for o in obs if o["state"][dim] is not None}):
+                res[dim][v] = summ([o for o in obs if o["state"][dim] == v], v)
+        return res
+
+    out["conditional"] = {
+        "連續上修 ≥ 3 個月＋營收創新高": cond_test(lambda v, m: up(m, 3) and hi(m)),
+        "分數 ≥ 80": cond_test(lambda v, m: v >= 80),
+    }
+    u.log("條件分組: " + json.dumps(out["conditional"], ensure_ascii=False)[:3000])
     out["persistence"] = persistence(records, reb, ind_of, e, di)
     u.save("research3.json", out)
 
