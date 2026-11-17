@@ -83,6 +83,73 @@ def multibagger(usable):
     return out
 
 
+def opportunity(usable):
+    """機會訊號：平常全放 0050，只有出現嚴格條件時才撥錢。重點是「訊號出現時贏 0050 的機率」，不是每期都要有。
+    條件只看訓練期（2018-2023）挑，驗證期（2023 之後）看是否仍成立。比的是 60 日、120 日後相對 0050 的報酬。"""
+    px = b.load_hist("px")
+    dates = sorted(px)
+    di = {d: i for i, d in enumerate(dates)}
+    e = []
+    last = None
+    for d in dates:
+        v = (px[d].get("0050") or [None])[0]
+        last = v if v else last
+        e.append(last)
+    for i in range(1, len(e)):
+        if e[i] and e[i - 1] and e[i] / e[i - 1] < 0.5:
+            k = e[i - 1] / e[i]
+            for j in range(i):
+                e[j] = e[j] / k if e[j] else e[j]
+    for t, snap in usable:
+        i = di[t]
+        caps = sorted([m["cap"] for m in snap.values() if m.get("cap")], reverse=True)
+        cap200 = caps[199] if len(caps) >= 200 else 0
+        for c, m in snap.items():
+            m["big"] = (m.get("cap") or 0) >= cap200
+            for hz in (60, 120):
+                if i + hz < len(dates) and e[i + hz] and e[i]:
+                    path = [px[d].get(c) for d in dates[i:i + hz + 1]]
+                    path = [x for x in path if x]
+                    if len(path) >= hz * 0.8 and len(u.after_split(path)) == len(path):
+                        m[f"xs{hz}"] = path[-1][0] / m["p"] - e[i + hz] / e[i]     # 相對 0050 的超額報酬
+    rh = lambda m: m.get("rev_hi") if m.get("rev_hi") is not None else -99
+    ac = lambda m: m.get("accel") if m.get("accel") is not None else -99
+    sc = lambda m: m.get("S") or 0
+    C = {
+        "分數 ≥ 90": lambda m: sc(m) >= 90,
+        "分數 ≥ 90＋營收創新高": lambda m: sc(m) >= 90 and rh(m) >= 0,
+        "分數 ≥ 85＋營收創新高＋動能 ≥ 10": lambda m: sc(m) >= 85 and rh(m) >= 0 and ac(m) >= 10,
+        "同上＋沒漲多（季乖離 ≤ 10%）": lambda m: sc(m) >= 85 and rh(m) >= 0 and ac(m) >= 10 and (m.get("b60") or 0) <= 10,
+        "同上＋市值前 200 大": lambda m: sc(m) >= 85 and rh(m) >= 0 and ac(m) >= 10 and (m.get("b60") or 0) <= 10 and m.get("big"),
+        "營收創新高 10% 以上＋動能 ≥ 15＋沒過熱": lambda m: rh(m) >= 10 and ac(m) >= 15 and not u.is_over(m),
+        "分數 ≥ 80＋營收創新高＋外資持股 ≥ 20%": lambda m: sc(m) >= 80 and rh(m) >= 0 and (m.get("qf") or 0) >= 20,
+        "分數 ≥ 80＋營收創新高＋連增 ≥ 12＋市值前 200 大": lambda m: sc(m) >= 80 and rh(m) >= 0 and (m.get("streak") or 0) >= 12 and m.get("big"),
+    }
+    pct = lambda xs: round(sum(xs) / len(xs) * 100, 1) if xs else None
+    res = {}
+    for name, f in C.items():
+        r = {}
+        for lab, part in (("2018-2023", [x for x in usable if x[0] < SPLIT]), ("2023-2026", [x for x in usable if x[0] >= SPLIT])):
+            for hz in (60, 120):
+                xs, fire, bask = [], 0, []
+                for t, snap in part:
+                    hit = [m[f"xs{hz}"] for m in snap.values() if f(m) and f"xs{hz}" in m]
+                    if hit:
+                        fire += 1
+                        xs += hit
+                        bask.append(sum(hit) / len(hit))
+                if not xs:
+                    r[f"{lab} {hz}日"] = None
+                    continue
+                xs.sort()
+                r[f"{lab} {hz}日"] = {"有訊號的週數比例": pct([1] * fire + [0] * (len(part) - fire)), "平均每次幾檔": round(len(xs) / max(1, fire), 1),
+                                     "個股贏 0050 機率": pct([x > 0 for x in xs]), "平均超額": round(sum(xs) / len(xs) * 100, 1),
+                                     "超額中位數": round(xs[len(xs) // 2] * 100, 1), "輸 0050 超過 20% 的機率": pct([x < -0.2 for x in xs]),
+                                     "訊號股等權組合贏 0050 機率": pct([x > 0 for x in bask]), "組合平均超額": round(sum(bask) / len(bask) * 100, 1)}
+        res[name] = r
+    return res
+
+
 def main():
     records = b.build_records()
     qfh = b.load_hist("qf")
@@ -216,6 +283,7 @@ def main():
             "平均每季換手": round(sum(sum(r["turn"][1:]) for r in runs) / max(1, sum(len(r["turn"]) - 1 for r in runs)) * 100, 1)}
         u.log(name + " " + json.dumps(out["strategies"][name], ensure_ascii=False))
     out["multibagger"] = multibagger(usable)
+    out["opportunity"] = opportunity(usable)
     u.save("research2.json", out)
 
 
