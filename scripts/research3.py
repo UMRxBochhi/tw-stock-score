@@ -128,6 +128,8 @@ def main():
 
     # 市值 = 發行股數（外資持股資料）× 股價；使用者條件：市值 ≥ 100 億
     qfh = b.load_hist("qf")
+    mgh = b.load_hist("mg")
+    mg_dates = sorted(mgh)
     last_sh = {}
     cap_ok_dates = set()
     for t, snap in records:
@@ -148,6 +150,9 @@ def main():
         t, snap = records[idx]
         rk = b.avail_rev_key(t)
         prev_qf = records[idx - 4][1] if idx >= 4 else {}
+        md = [d for d in mg_dates if d <= t]
+        mg = mgh[md[-1]] if md and (int(t) - int(md[-1])) < 100 else {}
+        bull = b.MKT.get(t, {}).get("up120")
         for c, m in snap.items():
             h = revh.get(c, {})
             ests = [est12(h, shift(rk, j)) for j in range(13)]
@@ -167,6 +172,12 @@ def main():
             if b6 is not None:
                 m["trend_ok"] = 100 if 0 <= b6 <= 15 else 60 if (-10 <= b6 < 0 or 15 < b6 <= 30) else 20
             # 籌碼面：外資持股 4 週變化、負乖離
+            # 修正版技術面／籌碼面：多頭才看支撐、融資使用率
+            if bull is True and m.get("sup_score") is not None:
+                m["sup_bull"] = m["sup_score"]
+            x = mg.get(c)
+            if x and x[0] is not None and x[1]:
+                m["fin_use"] = x[0] / x[1]
             q0 = (prev_qf.get(c) or {}).get("qf")
             if m.get("qf") is not None and q0 is not None:
                 m["qd4"] = m["qf"] - q0
@@ -194,7 +205,7 @@ def main():
             rk = {}
             for k in W:
                 key, sign = k.lstrip("-"), (-1 if k.startswith("-") else 1)
-                if key in ("trend_ok", "sup_score"):
+                if key in ("trend_ok", "sup_score", "sup_bull"):
                     rk[k] = {c: (m[key] / 100 if m.get(key) is not None else None) for c, m in items.items()}
                 else:
                     rk[k] = u.pct_rank({c: (m.get(key) * sign if m.get(key) is not None else None) for c, m in items.items()})
@@ -250,7 +261,14 @@ def main():
         return out
     TECH = {"trend_ok": .5, "sup_score": .5}
     CHIP = {"qd4": .5, "-b20": .5}
+    TECH2 = {"-b20": .5, "sup_bull": .5}
+    TECH3 = {"-b20": .4, "-vr": .2, "sup_bull": .4}
+    CHIP2 = {"qf": .5, "-fin_use": .5}
     VARIANTS = {
+        "修正版（技術＝負乖離＋多頭支撐，籌碼＝外資持股高＋融資使用率低）": lambda s: user_score(s, FUND, TECH2, CHIP2),
+        "修正版＋避開爆量": lambda s: user_score(s, FUND, TECH3, CHIP2),
+        "修正版，只加技術面": lambda s: user_score(s, FUND, TECH2, None),
+        "修正版，只加籌碼面": lambda s: user_score(s, FUND, None, CHIP2),
         "使用者架構（基本面65 技術20 籌碼15）": lambda s: user_score(s, FUND, TECH, CHIP),
         "使用者架構，限流動性前 50%": lambda s: user_score(s, FUND, TECH, CHIP, 0.5),
         "只看基本面（營收修正＋成長）": lambda s: user_score(s, FUND, None, None),
@@ -262,7 +280,7 @@ def main():
 
     # 先看各新指標的預測力（到下次換股的報酬）
     ic = {}
-    for k in ("rev_up_n", "rev_rev1", "rev_rev3", "trend_ok", "qd4"):
+    for k in ("rev_up_n", "rev_rev1", "rev_rev3", "trend_ok", "qd4", "b20", "vr", "sup_score", "sup_bull", "qf", "fin_use"):
         xs = []
         for idx in reb:
             t, snap = records[idx]
