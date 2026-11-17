@@ -404,7 +404,7 @@ def fetch_t86_otc(d: date):
     if not t:
         return None, "nodata"
     f, rows = t
-    nets = [i for i, x in enumerate(f) if "買賣超" in str(x)]
+    nets = [i for i, x in enumerate(f) if "買賣超" in str(x) or "淨買" in str(x)]   # 舊格式叫「淨買股數」
     if len(f) >= 24:
         idx = (4, 13, 22)
     elif len(nets) >= 4:      # 舊格式：外資、投信、自營商、合計

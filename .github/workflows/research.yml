@@ -1,0 +1,35 @@
+name: research
+
+# 研究：用 2018 起完整資料重新設計分數與選股規則（另一個排隊群組）
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["scripts/research.py"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: research
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python scripts/research.py
+      - name: commit
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/research.json
+          git diff --cached --quiet || git commit -m "research: $(TZ=Asia/Taipei date +%F)"
+          for i in 1 2 3; do git pull --rebase -X theirs && git push && break; sleep 10; done
