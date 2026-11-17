@@ -26,11 +26,13 @@ jobs:
           python-version: "3.12"
       - run: pip install requests
       - run: python scripts/research2.py
+      - run: python scripts/research3.py
+        if: always()
       - name: commit
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/research.json data/research2.json
+          git add data/research.json data/research2.json data/research3.json
           git diff --cached --quiet || git commit -m "research: $(TZ=Asia/Taipei date +%F)"
           for i in 1 2 3; do git pull --rebase -X theirs && git push && break; sleep 10; done
