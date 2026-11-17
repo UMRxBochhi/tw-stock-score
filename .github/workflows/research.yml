@@ -4,6 +4,9 @@ name: research
 # 籌碼資料（含發行股數→市值）抓完後自動跑研究 2；也可手動觸發
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [scripts/research3.py]
   workflow_run:
     workflows: [chips]
     types: [completed]
