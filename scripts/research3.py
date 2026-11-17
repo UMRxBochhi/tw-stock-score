@@ -20,6 +20,7 @@ import research as R    # noqa: E402
 
 COST = 0.005
 SPLIT = "20230615"
+MIN_CAP = 1e10     # 市值至少 100 億（使用者條件）；沒有市值資料的時間點不套用
 
 
 def shift(k, n):
@@ -68,6 +69,23 @@ def main():
             reb.append(idx)
     u.log(f"換股次數 {len(reb)}（{records[reb[0]][0]}~{records[reb[-1]][0]}）")
 
+    # 市值 = 發行股數（外資持股資料）× 股價；使用者條件：市值 ≥ 100 億
+    qfh = b.load_hist("qf")
+    last_sh = {}
+    cap_ok_dates = set()
+    for t, snap in records:
+        for c, v in (qfh.get(t) or {}).items():
+            if v and len(v) > 1 and v[1]:
+                last_sh[c] = v[1]
+        n_cap = 0
+        for c, m in snap.items():
+            if c in last_sh and m.get("p"):
+                m["cap"] = last_sh[c] * m["p"]
+                n_cap += 1
+        if n_cap >= 200:
+            cap_ok_dates.add(t)
+    u.log(f"有市值資料的時間點 {len(cap_ok_dates)} / {len(records)}")
+
     # 特徵
     for n, idx in enumerate(reb):
         t, snap = records[idx]
@@ -110,6 +128,8 @@ def main():
 
     def user_score(snap, W_f, W_t, W_c, liq_top=None):
         items = {c: m for c, m in snap.items() if not c.startswith("__")}
+        if MIN_CAP and any(m.get("cap") for m in items.values()):
+            items = {c: m for c, m in items.items() if (m.get("cap") or 0) >= MIN_CAP}
         if liq_top:
             lr = u.pct_rank({c: m.get("avgval") for c, m in items.items()})
             items = {c: m for c, m in items.items() if lr.get(c, 0) >= 1 - liq_top}
@@ -180,7 +200,7 @@ def main():
         "族群漏斗：前 3 族群→領先股→營收上修→本益比不貴": lambda s: funnel(s),
         "族群漏斗：前 5 族群": lambda s: funnel(s, top_ind=5),
         "族群漏斗：前 3 族群，不看本益比": lambda s: funnel(s, max_pos=None),
-                "資料導向分數 C（研究 1 最佳）": lambda s: R.comp_scores({c: m for c, m in s.items() if not c.startswith("__")}, R.COMPOSITES["C B＋低波動"]),
+                "資料導向分數 C（研究 1 最佳）": lambda s: R.comp_scores({c: m for c, m in s.items() if not c.startswith("__") and (not m.get("cap") or m["cap"] >= MIN_CAP)}, R.COMPOSITES["C B＋低波動"]),
     }
 
     # 先看各新指標的預測力（到下次換股的報酬）
