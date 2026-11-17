@@ -191,6 +191,10 @@ def main():
                 else:
                     break
             m["rev_up_n"] = up if ests[0] else None
+            cur12 = [h.get(shift(rk, i), [None])[0] for i in range(12)]
+            old12 = [h.get(shift(rk, i + 36), [None])[0] for i in range(12)]
+            if None not in cur12 + old12 and sum(old12) > 0:
+                m["cagr3"] = (sum(cur12) / sum(old12)) ** (1 / 3) - 1
             # 本益比位階（σ）：傳統＝近四季 EPS；前瞻＝近四季 EPS ×（1 + 營收預估成長）
             s0 = pe_m[pk[-1]].get(c) if pk else None
             if s0 and s0[0] and s0[1] and m.get("p"):
@@ -809,6 +813,29 @@ def main():
         "2023-2026 中位數": sorted(x["2023-2026 年化"] for x in rr)[len(rr) // 2],
         "0050 年化": rr[0]["0050 年化"]}
     out["robust"] = rob
+
+    # ---- 平常時期：本季名單加上「外資持股高」「近 3 年長期成長」會不會更好（三種起始月平均，避免挑到幸運月份）
+    qf_ = lambda m, v: (m.get("qf") or 0) >= v
+    cg_ = lambda m, v: m.get("cagr3") is not None and m["cagr3"] >= v
+    Q2 = {
+        "上修 ≥ 3＋創新高（目前網站）": lambda v, m: up(m, 3) and hi(m),
+        "＋外資持股 ≥ 20%": lambda v, m: up(m, 3) and hi(m) and qf_(m, 20),
+        "＋外資持股 ≥ 30%": lambda v, m: up(m, 3) and hi(m) and qf_(m, 30),
+        "＋近 3 年營收年成長 ≥ 10%": lambda v, m: up(m, 3) and hi(m) and cg_(m, 0.10),
+        "＋外資 ≥ 20%＋3 年成長 ≥ 10%": lambda v, m: up(m, 3) and hi(m) and qf_(m, 20) and cg_(m, 0.10),
+        "＋外資 ≥ 30%＋3 年成長 ≥ 10%": lambda v, m: up(m, 3) and hi(m) and qf_(m, 30) and cg_(m, 0.10),
+        "上修 ≥ 1＋外資 ≥ 20%＋3 年成長 ≥ 10%（不要求創新高）": lambda v, m: up(m, 1) and qf_(m, 20) and cg_(m, 0.10),
+    }
+    out["quarter2"] = {}
+    for name, cond in Q2.items():
+        rs = [thr_test(cond, 0.05, 3, K=2, off=o, maxn=20) for o in (0, 1, 2)]
+        avg = lambda k: round(sum(r[k] for r in rs if r.get(k) is not None) / len(rs), 1)
+        out["quarter2"][name] = {"年化（三種起始月平均）": avg("年化"), "三種起始月": [r["年化"] for r in rs],
+                                 "0050 年化": rs[0]["0050 年化"], "2018-2023": avg("2018-2023 年化"), "2018-2023 0050": rs[0]["2018-2023 0050"],
+                                 "2023-2026": avg("2023-2026 年化"), "2023-2026 0050": rs[0]["2023-2026 0050"],
+                                 "每月贏 0050": avg("每月贏 0050 比例"), "最大回撤": avg("最大回撤"), "平均檔數": avg("平均符合檔數"),
+                                 "個股占比": avg("平均個股占比")}
+        u.log(f"本季名單變化 {name}: " + json.dumps(out["quarter2"][name], ensure_ascii=False))
     u.log("穩健性: " + json.dumps(rob, ensure_ascii=False)[:2000])
     out["persistence"] = persistence(records, reb, ind_of, e, di)
     u.save("research3.json", out)

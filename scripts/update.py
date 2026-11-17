@@ -1563,6 +1563,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
         "groups": (gr_ := theme_stats({"產業": {g: [x["c"] for x in stocks if x["ind"] == g and x["s"].get("score") is not None]
                                                 for g in {x["ind"] for x in stocks if x["ind"]}}}, stocks, qf_latest).get("產業", [])),
         "step2": quarter_plan(stocks, prices, last),
+        "crash": crash_plan(stocks, prices, last, pe_monthly, fund),
         "picks": {rid: top_picks([(x["c"], x["m"]) for x in stocks], rid) for rid in RULES},
     }
 
@@ -1671,6 +1672,108 @@ def quarter_plan(stocks, prices, last):
             "hist": [dict(zip(("key", "start", "end", "ret", "ret0050", "n"),
                               (h["key"], h["start"], h["end"], *perf(h, h["end_px"], h["end_0050"]), len(h["codes"]))))
                      for h in st["hist"]]}
+
+
+# ---------------------------------------------------------------- 大跌加碼名單（2018~2026 六次大跌回測）
+# 0050 距一年高點跌超過 15% 時啟用；條件：營收預估上修中、前瞻本益比 < −0.5σ（和自己的前瞻本益比歷史比）、
+# 外資持股 ≥ 20%、近 3 年營收年複合成長 ≥ 10%、電子股、市值 ≥ 100 億。回測持有 12 個月：單檔贏 0050 約 6 成，6 次大跌組合都贏。
+CRASH_DD, CRASH_QF, CRASH_CAGR = -0.15, 20.0, 0.10
+TECH_KW = ("半導體", "電子", "電腦", "通信", "光電", "資訊")
+
+
+def _roc_prev(ym: str) -> str:
+    """西元年月 → 當月月底已公布的最新月營收（上個月，民國年月）"""
+    y, m = int(ym[:4]), int(ym[4:]) - 1
+    if m == 0:
+        y, m = y - 1, 12
+    return f"{y - 1911}{m:02d}"
+
+
+def crash_plan(stocks, prices, last, pe_monthly, fund):
+    import math as _m
+    # 0050 距一年高點
+    closes = []
+    d0 = datetime.strptime(last, "%Y%m%d")
+    yms = sorted({(d0 - timedelta(days=30 * i)).strftime("%Y%m") for i in range(13)})
+    seen = {}
+    if (DATA / "hist").exists():
+        for ym in yms:
+            seen.update(hist_read("px", ym))
+    seen.update(prices)
+    cut = (d0 - timedelta(days=365)).strftime("%Y%m%d")
+    for d in sorted(seen):
+        v = (seen[d].get("0050") or [None])[0]
+        if d >= cut and v:
+            closes.append(v)
+    for i in range(1, len(closes)):              # 分割（1 拆 N）時把之前的價格換算
+        if closes[i - 1] and closes[i] / closes[i - 1] < 0.5:
+            k = closes[i - 1] / closes[i]
+            closes[:i] = [x / k for x in closes[:i]]
+    dd = closes[-1] / max(closes) - 1 if closes else None
+
+    revh = {}
+    p = DATA / "hist" / "rev.json"
+    if p.exists():
+        revh = json.loads(p.read_text(encoding="utf-8"))
+    for c, h in fund.get("rev_hist", {}).items():
+        revh.setdefault(c, {}).update(h)
+
+    def factor(h, rk):
+        cur = [h.get(_shift(rk, i), [None])[0] for i in range(12)]
+        e = est12(h, rk)
+        return e / sum(cur) if e and None not in cur and sum(cur) > 0 else None
+
+    pkeys = sorted(pe_monthly)[-60:]
+    rows = []
+    for x in stocks:
+        m, c = x["m"], x["c"]
+        if (m.get("cap") or 0) < MIN_CAP or (m.get("rev_up_n") or 0) < 1 or not m.get("pe") or m["pe"] <= 0:
+            continue
+        if not any(k in (x.get("ind") or "") for k in TECH_KW) or (m.get("qf") or 0) < CRASH_QF:
+            continue
+        h = revh.get(c, {})
+        if not h:
+            continue
+        rk = max(h)
+        cur12 = [h.get(_shift(rk, i), [None])[0] for i in range(12)]
+        old12 = [h.get(_shift(rk, i + 36), [None])[0] for i in range(12)]
+        if None in cur12 + old12 or sum(old12) <= 0:
+            continue
+        cagr3 = (sum(cur12) / sum(old12)) ** (1 / 3) - 1
+        if cagr3 < CRASH_CAGR:
+            continue
+        fn = factor(h, rk)
+        if not fn or fn <= 0:
+            continue
+        fh = []
+        for k in pkeys:
+            v = (pe_monthly[k].get(c) or [None])[0]
+            f = factor(h, _roc_prev(k)) if v and v > 0 else None
+            if f and f > 0:
+                fh.append(_m.log(v / f))
+        if len(fh) < 24:
+            continue
+        mu = sum(fh) / len(fh)
+        sd = (sum((a - mu) ** 2 for a in fh) / len(fh)) ** 0.5
+        if sd <= 0:
+            continue
+        zf = (_m.log(m["pe"] / fn) - mu) / sd
+        m["fpe_zf"] = round(zf, 2)
+        m["cagr3"] = round(cagr3 * 100, 1)
+        if zf < -0.5:
+            rows.append(x)
+    rows.sort(key=lambda x: -(x["m"].get("qf") or 0))      # 大跌時外資持股是最能分辨好壞的特徵（6/6 次）
+    return {"dd": round(dd * 100, 1) if dd is not None else None, "active": dd is not None and dd <= CRASH_DD,
+            "n": len(rows), "codes": [x["c"] for x in rows[:30]],
+            "rows": [{"c": x["c"], "zf": x["m"]["fpe_zf"], "qf": x["m"].get("qf"), "cagr3": x["m"]["cagr3"],
+                      "up": x["m"].get("rev_up_n")} for x in rows[:30]]}
+
+
+def _shift(k, n):
+    y, m = int(k[:-2]), int(k[-2:]) - n
+    while m <= 0:
+        y, m = y - 1, m + 12
+    return f"{y}{m:02d}"
 
 
 # ---------------------------------------------------------------- main

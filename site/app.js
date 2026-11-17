@@ -231,6 +231,9 @@ function renderMarket() {
   const q = state.data.step2 || {};
   if (q.codes) cards.push(`<div class="card"><div class="lbl">② 本季名單</div><div class="val">${q.codes.length} 檔・${esc(q.level_now || "")}</div>
     <div class="note">建議個股 ${q.stock_w}%、其餘 0050；下次換股 ${q.next}　<a href="#" data-gotab="step2">看名單 →</a></div></div>`);
+  const k = state.data.crash;
+  if (k?.active) cards.push(`<div class="card"><div class="lbl">大跌加碼名單</div><div class="val">已啟用・${k.n} 檔</div>
+    <div class="note">0050 距一年高點 ${k.dd}%　<a href="#" data-gotab="step2">看名單 →</a></div></div>`);
   $("#market").innerHTML = cards.join("");
 }
 
@@ -255,8 +258,23 @@ function renderStep2Info() {
       ${q.added?.length && hist.length ? `新進：${q.added.map(nm).join("、")}。` : ""}${q.removed?.length ? `剔除：${q.removed.map(nm).join("、")}。` : ""}</p>
     ${hist.length ? `<table class="kv"><tr><td>期間</td><td>檔數</td><td>名單</td><td>0050</td></tr>${hist.map((h) =>
       `<tr><td>${md(h.start)}~${md(h.end)}</td><td>${h.n}</td><td>${pct(h.ret)}</td><td>${pct(h.ret0050)}</td></tr>`).join("")}</table>` : ""}
+    ${crashHtml()}
     <p class="note">回測（2018~2026，已扣交易成本）：這套條件每季換一次，年化約 28%，0050 約 22%，每月贏 0050 的比例約 6 成；仍有約 4 成月份會輸。
       有利／不利的判斷樣本少，可能是巧合，從這一季開始實際記錄驗證。不是投資建議。</p></div>`;
+}
+
+function crashHtml() {
+  const k = state.data.crash;
+  if (!k) return "";
+  const nm = (c) => { const x = state.data.stocks.find((s) => s.c === c); return `<a href="#${c}" data-open="${c}">${c} ${esc(x?.n || "")}</a>`; };
+  const head = k.active
+    ? `<span class="chip warn">已啟用</span> 0050 距一年高點 ${k.dd}%（跌超過 15%）：可以分 2~3 次加碼 0050，並買進下面這組股票（持有 12 個月）。`
+    : `<span class="chip neutral">未啟用</span> 0050 距一年高點 ${k.dd ?? "—"}%；跌超過 15% 才啟用。下面是目前符合條件的股票，先當觀察。`;
+  return `<div style="margin-top:10px"><b>大跌加碼名單</b>　<span class="note">${head}</span>
+    <p class="note">條件：營收預估上修中、前瞻本益比 &lt; −0.5σ（和自己過去 5 年的前瞻本益比比）、外資持股 ≥ 20%、近 3 年營收年成長 ≥ 10%、電子股、市值 ≥ 100 億。
+      依外資持股排序（大跌時最能分辨好壞的特徵）；目前符合 ${k.n ?? 0} 檔。回測 2020~2025 共 6 次大跌，持有 12 個月單檔約 6 成贏 0050、組合 6 次都贏；但樣本少，而且下跌途中買進可能先套一段，所以要分批。</p>
+    ${k.rows?.length ? `<table class="kv"><tr><td>股票</td><td>前瞻位階</td><td>外資持股</td><td>3 年營收年成長</td><td>連續上修</td></tr>${k.rows.map((r) =>
+      `<tr><td>${nm(r.c)}</td><td>${r.zf}σ</td><td>${r.qf ?? "—"}%</td><td>${r.cagr3}%</td><td>${r.up} 月</td></tr>`).join("")}</table>` : '<p class="note">目前沒有符合的股票。</p>'}</div>`;
 }
 
 // ---------- 第三步：持股監控
