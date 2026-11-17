@@ -41,6 +41,63 @@ def est12(h, k):
     return sum(cur) * (1 + g)
 
 
+def persistence(records, reb, ind_of, e, di):
+    """上修持續性：連續上修 N 個月後，下個月繼續上修的機率、之後的報酬（相對 0050）；
+    並區分「整個族群一起上修」vs「只有自己」、「低基期造成的假成長」"""
+    nxt_up, ret = {}, {}
+    seq = [records[i] for i in reb]
+    for n in range(len(seq) - 1):
+        t, snap = seq[n]
+        t2, snap2 = seq[n + 1]
+        mk = snap.get("__mkt")
+        # 族群上修比例
+        g_up = {}
+        for c, m in snap.items():
+            if c.startswith("__") or m.get("rev_rev1") is None:
+                continue
+            g = ind_of(c)
+            if g:
+                g_up.setdefault(g, []).append(m["rev_rev1"] > 0)
+        g_ratio = {g: sum(v) / len(v) for g, v in g_up.items() if len(v) >= 3}
+        for c, m in snap.items():
+            if c.startswith("__") or m.get("rev_up_n") is None:
+                continue
+            k = m["rev_up_n"]
+            bucket = "0（本月下修）" if k == 0 else "1 個月" if k == 1 else "2~3 個月" if k <= 3 else "4~6 個月" if k <= 6 else "7~11 個月" if k <= 11 else "12 個月以上"
+            m2 = snap2.get(c)
+            if m2 and m2.get("rev_rev1") is not None:
+                nxt_up.setdefault(bucket, []).append(m2["rev_rev1"] > 0)
+            if m.get("hold") is not None and mk:
+                wide = g_ratio.get(ind_of(c), 0) >= 0.6
+                ret.setdefault(bucket, []).append(m["hold"] - mk["hold"])
+                if k >= 2:
+                    ret.setdefault("連續上修≥2：族群多數也上修", []).append(m["hold"] - mk["hold"]) if wide else                         ret.setdefault("連續上修≥2：只有自己上修", []).append(m["hold"] - mk["hold"])
+                    big1 = (m.get("rev_rev1") or 0) > 0.15 and (m.get("rev_rev3") or 0) < (m.get("rev_rev1") or 0) * 1.2
+                    (ret.setdefault("單月暴衝型（一次性嫌疑）", []) if big1 else ret.setdefault("穩定累積型", [])).append(m["hold"] - mk["hold"])
+    pct = lambda xs: round(sum(xs) / len(xs) * 100, 1) if xs else None
+    order = ["0（本月下修）", "1 個月", "2~3 個月", "4~6 個月", "7~11 個月", "12 個月以上"]
+    res = {"下個月繼續上修的機率": {k: {"機率": pct(nxt_up[k]), "樣本": len(nxt_up[k])} for k in order if k in nxt_up},
+           "下個月相對 0050 的超額報酬": {k: {"平均": round(sum(v) / len(v) * 100, 2), "贏 0050 機率": pct([x > 0 for x in v]), "樣本": len(v)}
+                                   for k, v in ret.items()}}
+    # 上修一段會持續多久：連續上修的長度分布（每段從開始到中斷）
+    runs = []
+    cur = {}
+    for t, snap in seq:
+        for c, m in snap.items():
+            if c.startswith("__") or m.get("rev_rev1") is None:
+                continue
+            if m["rev_rev1"] > 0:
+                cur[c] = cur.get(c, 0) + 1
+            elif cur.get(c):
+                runs.append(cur.pop(c))
+    if runs:
+        runs.sort()
+        res["一段上修持續多久（月）"] = {"中位數": runs[len(runs) // 2], "平均": round(sum(runs) / len(runs), 1),
+                                 "只有 1 個月的比例": pct([r == 1 for r in runs]), "3 個月以上": pct([r >= 3 for r in runs]),
+                                 "6 個月以上": pct([r >= 6 for r in runs]), "12 個月以上": pct([r >= 12 for r in runs]), "段數": len(runs)}
+    return res
+
+
 def main():
     records = b.build_records()
     revh = json.loads((b.HIST / "rev.json").read_text(encoding="utf-8")) if (b.HIST / "rev.json").exists() else {}
@@ -266,6 +323,7 @@ def main():
                 "各年（策略/0050）": {y: f"{(v[0] - 1) * 100:+.0f}% / {(v[1] - 1) * 100:+.0f}%" for y, v in years.items()},
                 "最大回撤": round(dd * 100, 1), "平均每月換手": round(sum(x[3] for x in rows[1:]) / max(1, len(rows) - 1) * 100, 1)}
             u.log(f"{vname} 前{N}: " + json.dumps(out["portfolios"][f"{vname}｜前 {N} 名"], ensure_ascii=False)[:400])
+    out["persistence"] = persistence(records, reb, ind_of, e, di)
     u.save("research3.json", out)
 
 
