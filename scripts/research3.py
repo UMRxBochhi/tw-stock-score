@@ -11,6 +11,7 @@
 輸出 data/research3.json
 """
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -146,11 +147,33 @@ def main():
             cap_ok_dates.add(t)
     u.log(f"有市值資料的時間點 {len(cap_ok_dates)} / {len(records)}")
 
+    pe_m = u.load("pe_monthly.json", {})
+    pe_keys = sorted(pe_m)
+    _rev0 = u.load("fundamentals.json", {}).get("revenue", {})
+    _ind0, _fc = {}, {}
+
+    def fwd_factor(code, rk):
+        """未來 12 個月推估營收 / 近 12 個月營收 = 1 + 預估成長"""
+        key = (code, rk)
+        if key not in _fc:
+            h = revh.get(code, {})
+            cur = [h.get(shift(rk, i), [None])[0] for i in range(12)]
+            e12 = est12(h, rk)
+            _fc[key] = e12 / sum(cur) if e12 and None not in cur and sum(cur) > 0 else None
+        return _fc[key]
+
+    def zlog(v, xs):
+        lx = [math.log(x) for x in xs]
+        mu = sum(lx) / len(lx)
+        sd = (sum((a - mu) ** 2 for a in lx) / len(lx)) ** 0.5
+        return (math.log(v) - mu) / sd if sd > 0 else None
+
     # 特徵
     for n, idx in enumerate(reb):
         t, snap = records[idx]
         rk = b.avail_rev_key(t)
         prev_qf = records[idx - 4][1] if idx >= 4 else {}
+        pk = [k for k in pe_keys if k < t[:6]][-60:]
         md = [d for d in mg_dates if d <= t]
         mg = mgh[md[-1]] if md and (int(t) - int(md[-1])) < 100 else {}
         bull = b.MKT.get(t, {}).get("up120")
@@ -168,6 +191,25 @@ def main():
                 else:
                     break
             m["rev_up_n"] = up if ests[0] else None
+            # 本益比位階（σ）：傳統＝近四季 EPS；前瞻＝近四季 EPS ×（1 + 營收預估成長）
+            s0 = pe_m[pk[-1]].get(c) if pk else None
+            if s0 and s0[0] and s0[1] and m.get("p"):
+                pe_now = s0[0] * m["p"] / s0[1]
+                hist = [(k, (pe_m[k].get(c) or [None])[0]) for k in pk]
+                hist = [(k, x) for k, x in hist if x and x > 0]
+                if pe_now > 0 and len(hist) >= 24:
+                    m["pe_zt"] = zlog(pe_now, [x for _, x in hist])
+                    if c not in _ind0:
+                        _ind0[c] = u.industry(c, _rev0)
+                    fn = fwd_factor(c, rk)
+                    if _ind0[c] not in u.FWD_SKIP_IND and fn and fn > 0:
+                        fh = []
+                        for k, x in hist:
+                            f = fwd_factor(c, b.avail_rev_key(k + "28"))
+                            if f and f > 0:
+                                fh.append(x / f)
+                        if len(fh) >= 24:
+                            m["pe_zf"] = zlog(pe_now / fn, fh)
             # 技術面：站上季線但不追高（0~15% 最好），接近支撐
             b6 = m.get("b60")
             if b6 is not None:
@@ -281,7 +323,7 @@ def main():
 
     # 先看各新指標的預測力（到下次換股的報酬）
     ic = {}
-    for k in ("rev_up_n", "rev_rev1", "rev_rev3", "trend_ok", "qd4", "b20", "vr", "sup_score", "sup_bull", "qf", "fin_use"):
+    for k in ("rev_up_n", "rev_rev1", "rev_rev3", "trend_ok", "qd4", "b20", "vr", "sup_score", "sup_bull", "qf", "fin_use", "pe_zt", "pe_zf"):
         xs = []
         for idx in reb:
             t, snap = records[idx]
@@ -654,7 +696,7 @@ def main():
     }
     u.log("條件分組: " + json.dumps(out["conditional"], ensure_ascii=False)[:3000])
     # ---- 特徵組合的個股勝率：每月起點、市值 ≥ 100 億，符合條件的個股持有 H 個月 vs 0050
-    def combo_test():
+    def combo_test(CS_in=None):
         pos = lambda m: -m["val_cheap"] if m.get("val_cheap") is not None else None
         cheap = lambda m: pos(m) is not None and pos(m) < 31          # 約 −0.5σ 以下
         fair = lambda m: pos(m) is not None and pos(m) <= 69          # 約 +0.5σ 以下
@@ -673,6 +715,8 @@ def main():
             "上修 ≥ 3＋創新高＋本益比不貴": lambda m: up(m, 3) and hi(m) and fair(m),
             "上修 ≥ 6＋創新高＋本益比不貴": lambda m: up(m, 6) and hi(m) and fair(m),
         }
+        if CS_in:
+            CS = CS_in
         res = {}
         for H in (3, 6, 12):
             ev = {k: [] for k in CS}
@@ -721,6 +765,28 @@ def main():
         return res
 
     out["combo"] = combo_test()
+    zt = lambda m: m.get("pe_zt")
+    zf = lambda m: m.get("pe_zf")
+    lt = lambda f, v: (lambda m: f(m) is not None and f(m) < v)
+    gt = lambda f, v: (lambda m: f(m) is not None and f(m) > v)
+    mid = lambda f: (lambda m: f(m) is not None and -0.5 <= f(m) <= 0.5)
+    uh = lambda m: up(m, 3) and hi(m)
+    out["combo_pe"] = combo_test({
+        "全部（市值 ≥ 100 億）": lambda m: True,
+        "傳統本益比 < −0.5σ": lt(zt, -0.5),
+        "前瞻本益比 < −0.5σ": lt(zf, -0.5),
+        "前瞻本益比 > +0.5σ": gt(zf, 0.5),
+        "上修 ≥ 3＋創新高（不看位階）": uh,
+        "上修 ≥ 3＋創新高＋前瞻 < −0.5σ": lambda m: uh(m) and lt(zf, -0.5)(m),
+        "上修 ≥ 3＋創新高＋前瞻 −0.5~+0.5σ": lambda m: uh(m) and mid(zf)(m),
+        "上修 ≥ 3＋創新高＋前瞻 > +0.5σ": lambda m: uh(m) and gt(zf, 0.5)(m),
+        "上修 ≥ 3＋創新高＋前瞻 ≤ +0.5σ": lambda m: uh(m) and zf(m) is not None and zf(m) <= 0.5,
+        "上修 ≥ 3＋創新高＋傳統 < −0.5σ": lambda m: uh(m) and lt(zt, -0.5)(m),
+        "上修 ≥ 3＋前瞻 < −0.5σ": lambda m: up(m, 3) and lt(zf, -0.5)(m),
+        "上修 ≥ 2＋前瞻 < −0.5σ": lambda m: up(m, 2) and lt(zf, -0.5)(m),
+        "上修 ≥ 3＋創新高＋前瞻 < −1σ": lambda m: uh(m) and lt(zf, -1.0)(m),
+    })
+    u.log("前瞻本益比組合: " + json.dumps(out["combo_pe"], ensure_ascii=False)[:3000])
     u.log("特徵組合: " + json.dumps(out["combo"], ensure_ascii=False)[:3000])
     out["persistence"] = persistence(records, reb, ind_of, e, di)
     u.save("research3.json", out)
