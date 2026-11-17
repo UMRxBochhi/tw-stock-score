@@ -331,3 +331,7 @@ h1 { letter-spacing: .5px; }
   color: var(--text-secondary); border: 1px solid var(--glass-border); background: var(--glass); }
 tr.sel { background: rgba(42, 120, 214, .14); }
 #page td .chip { font-size: 12px; padding: 1px 8px; }
+.kv.steps { margin-top: 12px; }
+.kv.steps td:first-child { width: 90px; font-weight: 600; color: var(--text-primary); }
+.subscores .row { grid-template-columns: 96px 1fr 32px; }
+.kv.steps td, #watchInfo .kv td { text-align: left !important; }

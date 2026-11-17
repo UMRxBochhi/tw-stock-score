@@ -10,10 +10,8 @@ const state = {
   data: null, tab: "win", sort: null, asc: false,
   f: Object.fromEntries(Object.entries(LS.get("filters", {})).map(([k, v]) => [k === "short" || k === "long" ? "score" : k, v])),
   watch: new Set(LS.get("watch", [])), // 自選股
-  strat: LS.get("strat", "long"),      // 目前策略：short / long
 };
 const STRAT_NAME = { short: "短線", long: "長線" };
-const VALUE_YIELD = 4.5, VALUE_PEPOS = 40;
 
 // ---------- 格式化
 const NA = '<span class="na">—</span>';
@@ -32,21 +30,19 @@ const rocYm = (k) => `${+k.slice(0, -2) + 1911}/${k.slice(-2)}`;
 
 // ---------- 欄位定義（表格、篩選共用）
 const F = {
-  score: { t: "綜合分數", short: "分數", g: (s) => s.s.score, kind: "total", grp: "分數" },
+  score: { t: "三步驟分數（基本面 65、技術面 20、籌碼面 15）", short: "分數", g: (s) => s.s.score, kind: "total", grp: "分數" },
+  f: { t: "基本面分數（營收預估上修、成長）", short: "基本面", g: (s) => s.s.f, kind: "bar", grp: "分數" },
+  t: { t: "技術面分數（趨勢、支撐，不追高）", short: "技術面", g: (s) => s.s.t, kind: "bar", grp: "分數" },
+  c: { t: "籌碼面分數（外資、大戶持股變化，負乖離）", short: "籌碼面", g: (s) => s.s.c, kind: "bar", grp: "分數" },
   d5: { t: "5 日分數變化", short: "5日Δ", g: (s) => s.s.d5, kind: "signed1", suf: "", grp: "分數" },
-  peg: { t: "成長性價比分數（近 3 月營收年增 ÷ 本益比）", short: "PEG", g: (s) => s.s.peg, kind: "bar", grp: "分數" },
-  liq: { t: "流動性分數（成交金額規模）", short: "流動性", g: (s) => s.s.liq, kind: "bar", grp: "分數" },
-  value: { t: "估值（參考，不計分）", short: "估值*", g: (s) => s.s.value, kind: "bar", grp: "分數" },
-  sup: { t: "支撐位置（參考，不計分）", short: "支撐*", g: (s) => s.s.sup, kind: "bar", grp: "分數" },
-  fund: { t: "營收成長分數", short: "營收", g: (s) => s.s.fund, kind: "bar", grp: "分數" },
+  cap: { t: "市值（億）", short: "市值(億)", g: (s) => s.m.cap != null ? s.m.cap / 1e8 : null, kind: "num0", grp: "價格" },
+  qd4: { t: "外資持股 4 週變化（百分點）", short: "外資Δ", g: (s) => s.m.qd4, kind: "signed", suf: "", grp: "籌碼" },
   rev_up_n: { t: "營收預估連續上修月數", short: "連續上修", g: (s) => s.m.rev_up_n, kind: "num0", grp: "營收" },
   rev_rev3: { t: "營收預估近 3 個月上修 %", short: "3月上修", g: (s) => s.m.rev_rev3, kind: "signed1", grp: "營收" },
   pe_z: { t: "本益比位階 σ（< −0.5 便宜、> +0.5 偏貴）", short: "位階σ", g: (s) => s.m.pe_z, kind: "signed", suf: "", grp: "價值" },
   opm: { t: "營業利益率 %（今年累計）", short: "營益率", g: (s) => s.m.opm, kind: "num1", suf: "%", grp: "獲利" },
   rev_hi: { t: "最新月營收距前 12 月最高 %（≥ 0 = 創新高）", short: "營收距高", g: (s) => s.m.rev_hi, kind: "signed1", grp: "營收" },
-  chip: { t: "外資持股分數", short: "外資持股", g: (s) => s.s.chip, kind: "bar", grp: "分數" },
   qf: { t: "外資持股比例 %", short: "外資持股%", g: (s) => s.m.qf, kind: "num1", suf: "%", grp: "籌碼" },
-  tech: { t: "趨勢（參考，不計分）", short: "趨勢*", g: (s) => s.s.tech, kind: "bar", grp: "分數" },
   sup_dist: { t: "距前波支撐 %（負 = 已跌破）", short: "距支撐", g: (s) => s.m.sup_dist, kind: "signed1", grp: "支撐" },
   sup_broke: { t: "跌破前波低點（1 = 是、0 = 否）", short: "破底", g: (s) => s.m.sup_broke == null ? null : (s.m.sup_broke ? 1 : 0), kind: "num0", grp: "支撐" },
   vsup_dist: { t: "距大量支撐 %", short: "距大量", g: (s) => s.m.vsup_dist, kind: "signed1", grp: "支撐" },
@@ -94,50 +90,34 @@ function cell(key, s) {
 }
 
 const TABCOLS = {
-  pick: ["p", "chg", "b20", "score", "streak", "rev_hi", "accel", "pe", "f20", "avgval", "vpos"],
-  win: ["p", "chg", "b20", "score", "d5", "fund", "liq", "peg", "chip", "value"],
-  value: ["p", "yld", "pe", "fpe", "vpos", "sup_dist", "accel", "score"],
-  watch: ["p", "chg", "b20", "score", "d5", "rev_up_n", "rev_rev3", "rev_hi", "accel", "pe_z", "avgval"],
-  screen: ["p", "chg", "score", "d5", "rev_up_n", "rev_rev3", "rev_hi", "accel", "opm", "pe_z", "fpe", "sup_dist", "qf"],
+  step2: ["p", "chg", "score", "f", "t", "c", "rev_up_n", "rev_rev3", "pe_z", "b60", "cap"],
+  watch: ["p", "chg", "score", "rev_up_n", "rev_rev3", "pe_z", "b20", "b60", "qd4"],
+  screen: ["p", "chg", "score", "f", "t", "c", "rev_up_n", "rev_rev3", "rev_hi", "pe_z", "opm", "qf", "cap"],
 };
-const DEFAULT_SORT = { pick: [null, false], win: ["score", false], value: ["score", false], watch: ["score", false], screen: ["score", false] };
-const HIDE_SM = new Set(["b60", "peg", "rev_hi", "pe", "chg", "value", "sup", "fund", "chip", "tech", "liq", "streak", "rev3", "avgval", "vpos", "sup_dist", "accel", "pb", "pe", "d5", "roe", "f20", "t20", "rev_yoy", "vsup_dist", "r20"]);
+const DEFAULT_SORT = { step2: [null, false], watch: ["score", false], screen: ["score", false] };
+const HIDE_SM = new Set(["chg", "f", "t", "c", "rev_rev3", "rev_hi", "b20", "b60", "cap", "opm", "qf", "qd4", "d5"]);
 
-const FILTER_TABS = new Set(["win", "value", "screen"]);
+const FILTER_TABS = new Set(["screen"]);
 
 // ---------- 快速篩選
 const PRESETS = {
-  grow_trust: { t: "營收成長＋投信買超", f: { rev_yoy: [20, null], accel: [0, null], t20: [1, null] } },
-  accel_up: { t: "營收動能轉強", f: { accel: [10, null], streak: [3, null] } },
-  accel_down: { t: "營收動能轉弱（留意下修）", f: { accel: [null, -10] } },
-  yield_low: { t: "高殖利率＋河流圖低位階", f: { yld: [5, null], vpos: [null, 30] } },
-  strong: { t: "強勢股（趨勢≥80、站上季線）", f: { tech: [80, null], b60: [0, null], short: [60, null] } },
-  pullback: { t: "回測支撐不破（離前波支撐 4% 內）", f: { sup_broke: [0, 0], sup_dist: [0, 4] } },
-  vsupport: { t: "站在大量支撐上（5% 內）", f: { vsup_dist: [0, 5] } },
-  broke: { t: "跌破前波低點（避開）", f: { sup_broke: [1, 1] } },
-  river_cheap: { t: "河流圖便宜區（預估位階 ≤ 20%）", f: { vpos: [null, 20] } },
-  score80: { t: "綜合分數 ≥ 80（回測勝率最高的區間）", f: { score: [80, null] } },
-  rev_high: { t: "營收創 12 個月新高", f: { rev_hi: [0, null] } },
   upgrade: { t: "營收預估連續上修 ≥ 3 個月", f: { rev_up_n: [3, null] } },
-  upgrade_cheap: { t: "連續上修 ≥ 2 個月＋本益比位階便宜（< −0.5σ）", f: { rev_up_n: [2, null], pe_z: [null, -0.5] } },
+  upgrade_cheap: { t: "連續上修 ≥ 2 個月＋本益比便宜（< −0.5σ）", f: { rev_up_n: [2, null], pe_z: [null, -0.5] } },
   upgrade_fair: { t: "連續上修 ≥ 2 個月＋本益比不貴（≤ +0.5σ）", f: { rev_up_n: [2, null], pe_z: [null, 0.5] } },
-  foreign: { t: "外資大買", f: { f20: [5, null] } },
-  quality: { t: "高 ROE＋高毛利", f: { roe: [15, null], gm: [30, null] } },
-  score_up: { t: "5 日分數大進步", f: { d5: [10, null] } },
+  rev_high: { t: "營收創 12 個月新高", f: { rev_hi: [0, null] } },
+  big_cap: { t: "市值 ≥ 100 億＋分數 ≥ 70", f: { cap: [100, null], score: [70, null] } },
+  downgrade: { t: "營收預估本月下修（留意）", f: { rev_up_n: [0, 0] } },
+  rich: { t: "本益比偏貴（> +0.5σ）", f: { pe_z: [0.5, null] } },
 };
 
 // ---------- 清單
 function baseList() {
   const all = state.data.stocks;
   switch (state.tab) {
-    case "pick": {
-      if (state.pickAll) return all.filter((s) => (s.m.rules || []).includes(ruleId()));
-      const codes = state.data.picks?.[ruleId()] || [];
+    case "step2": {
+      const codes = state.data.step2?.codes || [];
       return codes.map((c) => all.find((s) => s.c === c)).filter(Boolean);
     }
-    case "win": return all.filter((s) => s.s.score != null);
-    case "value": return all.filter((s) => s.m.liquid && s.m.pe > 0 && (s.m.fpe_pos ?? s.m.pe_pos) != null &&
-      (s.m.fpe_pos ?? s.m.pe_pos) <= VALUE_PEPOS && (s.m.accel == null || s.m.accel > -10));
     case "watch": return all.filter((s) => state.watch.has(s.c));
     default: return all;
   }
@@ -187,20 +167,17 @@ function renderTable() {
       <td class="l hide-sm"><span class="ind">${esc(s.ind || "")}</span></td>
       ${cols.map((k) => `<td class="${HIDE_SM.has(k) ? "hide-sm" : ""}">${cell(k, s)}</td>`).join("")}</tr>`).join("");
   let empty = "沒有符合條件的股票。";
-  if (state.tab === "watch" && !state.watch.size) empty = "還沒有自選股。在任何清單點 ☆ 就能加入。";
+  if (state.tab === "watch" && !state.watch.size) empty = "還沒有持股。點 ☆ 加入。";
   $("#tableWrap").innerHTML = list.length ? `<table><thead><tr>${th}</tr></thead><tbody>${tb}</tbody></table>`
     : `<p class="empty">${empty}</p>`;
 }
 
-const ruleId = () => state.strat === "long" ? "long_core" : "short_core";
-
 function flagHtml(s) {
   const m = s.m;
-  if ((m.rules || []).includes(ruleId()) && state.tab !== "pick") return ` <span class="flag good" title="符合${STRAT_NAME[state.strat]}選股條件">${STRAT_NAME[state.strat]}候選</span>`;
-  if (m.over) return ' <span class="flag warn" title="20 日乖離 > 20% 或季線乖離 > 50%，回測勝率約 50%，已扣 15 分">乖離過大</span>';
-  if (m.sup_broke) return ' <span class="flag warn" title="收盤價跌破最近一個波段低點">破前低</span>';
-  if (m.accel != null && m.accel <= -10) return ' <span class="flag warn" title="近 3 月營收年增明顯低於近 12 月">動能轉弱</span>';
-  if (m.accel != null && m.accel >= 10 && (m.rev3 ?? 0) > 0) return ' <span class="flag good" title="近 3 月營收年增明顯高於近 12 月">動能轉強</span>';
+  if (state.tab === "step2" && m.grp) return ` <span class="flag" title="來自前段族群">${esc(m.grp)}</span>`;
+  if (m.over) return ' <span class="flag warn" title="20 日乖離 > 20% 或季線乖離 > 50%，分數已扣 15">過熱</span>';
+  if (m.rev_up_n === 0) return ' <span class="flag warn" title="營收預估本月下修">預估下修</span>';
+  if (m.rev_up_n >= 3) return ` <span class="flag good" title="營收預估連續上修">上修 ${m.rev_up_n} 月</span>`;
   return "";
 }
 
@@ -243,162 +220,59 @@ function renderMarket() {
       <div class="breadth" title="上漲 ${m.up}、平盤 ${m.flat}、下跌 ${m.down}"><span class="b-up" style="width:${m.up / tot * 100}%"></span><span class="b-flat" style="width:${m.flat / tot * 100}%"></span><span class="b-down" style="width:${m.down / tot * 100}%"></span></div>
       <div class="note">上漲 ${m.up}・平盤 ${m.flat}・下跌 ${m.down}</div></div>`);
   }
-  const inds = state.data.industries || [];
-  if (inds.length) {
-    const top = [...inds].sort((a, b) => b.score - a.score).slice(0, 3);
-    cards.push(`<div class="card"><div class="lbl">產業平均分數 前三</div>${top.map((i) =>
-      `<div class="mini"><a href="#" data-goind="${esc(i.ind)}">${esc(i.ind)}</a><b>${i.score.toFixed(0)}</b></div>`).join("")}</div>`);
-  }
-  const nr = (id) => state.data.stocks.filter((s) => (s.m.rules || []).includes(id)).length;
-  cards.push(`<div class="card"><div class="lbl">今天的策略候選</div><div class="val">${nr(ruleId())} 檔</div>
-    <div class="note">長線 ${nr("long_core")} 檔・短線 ${nr("short_core")} 檔　<a href="#" data-gotab="pick">看精選 →</a></div></div>`);
+  const g = (state.data.groups || []).filter((x) => x.n >= 5).slice(0, 3);
+  if (g.length) cards.push(`<div class="card"><div class="lbl">① 最強族群</div>${g.map((x) =>
+    `<div class="mini"><a href="#" data-gotab="trend">${esc(x.seg)}</a><b>${x.seg_score?.toFixed(0) ?? "—"}</b></div>`).join("")}</div>`);
+  const n2 = state.data.step2?.codes?.length || 0;
+  cards.push(`<div class="card"><div class="lbl">② 選股候選</div><div class="val">${n2} 檔</div>
+    <div class="note">前段族群、市值 ≥ 100 億、預估上修中　<a href="#" data-gotab="step2">看候選 →</a></div></div>`);
   $("#market").innerHTML = cards.join("");
 }
 
-// ---------- 產業頁
-function renderIndustries() {
-  const k = state.strat;
-  const inds = [...(state.data.industries || [])].sort((a, b) => b.score - a.score);
-  $("#page").innerHTML = `<div class="tablebox"><table>
-    <thead><tr><th class="l">產業</th><th>評分家數</th><th>平均分數</th><th>長線候選</th><th>平均今日</th><th>平均 20 日</th><th class="l">分數前三</th></tr></thead>
-    <tbody>${inds.map((i) => `<tr data-goind="${esc(i.ind)}">
-      <td class="l"><a href="#">${esc(i.ind)}</a></td><td>${i.n}</td><td>${bar(i.score)}</td><td>${i.cand || ""}</td><td>${signed(i.chg)}</td><td>${signed(i.r20, 1)}</td>
-      <td class="l">${i.top.map(([c, n, t]) => `<a href="#${c}" data-open="${c}">${esc(n)}</a> <span class="na">${t.toFixed(0)}</span>`).join("、")}</td></tr>`).join("")}
-    </tbody></table></div><p class="note">依平均分數排序。點產業會切到選股器並只顯示該產業。</p>`;
-}
-
-// ---------- 策略選股
-function renderRuleInfo() {
-  const id = ruleId(), r = state.data.rules?.[id], bt = state.bt?.rules?.[id];
-  if (!r) { $("#ruleInfo").innerHTML = ""; return; }
-  const isL = r.h === "long";
-  const P = (x) => x != null ? x + "%" : "—";
-  const row = (lab, tr, te, k) => `<tr><td>${lab}</td><td>${P(tr?.[k])}</td><td>${P(te?.[k])}</td></tr>`;
-  const nC = state.data.stocks.filter((s) => (s.m.rules || []).includes(id)).length;
-  const steps = isL ? [
-    "<b>篩選</b>：營收連續年增 ≥ 12 個月、20 日均成交金額 ≥ 10 億、不過熱（20 日乖離 ≤ +20% 且季線乖離 ≤ +50%）。三個條件都要符合。",
-    "<b>挑選</b>：從候選中挑 5 檔。照「外資 20 日買超比例」由高到低取前 5 檔。（試過強制分散產業，回測沒有比較好，所以不限制；但 5 檔裡有 3 檔以上同族群時，要知道風險較集中。）",
-    "<b>買進</b>：5 檔等金額買進。過熱的不追，等它回到條件內再說。",
-    "<b>標示「動能轉弱」的不用排除</b>：回測過，排除營收動能轉弱的股票後，組合反而變差（最差一期從 −24% 變 −35%）。長線看的是「連續成長」，短期放緩不影響。",
-    "<b>持有</b>：約 3 個月（60 個交易日）。期間不用每天看。",
-    "<b>檢查與換股</b>：到期時重新篩選。仍符合條件的續抱，不符合的賣出、換成新的候選。",
-    `<b>資金控管</b>：回測最差一期 5 檔組合約 ${bt?.top_test ? bt.top_test.worst.toFixed(0) : "−25"}%，投入金額要是你能承受短期跌這麼多的錢。`,
-  ] : [
-    "<b>篩選</b>：營收連續年增 ≥ 12 個月、營收動能 > 0（近 3 月年增高於近 12 月）、20 日均成交金額 ≥ 10 億、股價在 20 日線下（回檔中）、不過熱。",
-    "<b>挑選</b>：從候選中挑 3 檔，照外資持股比例由高到低取前 3 檔。",
-    "<b>買進</b>：3 檔等金額。",
-    "<b>持有</b>：約 1 個月（20 個交易日），到期賣出、重新篩選。",
-    `<b>資金控管</b>：回測最差一期 3 檔組合約 ${bt?.top_test ? bt.top_test.worst.toFixed(0) : "−30"}%，短線波動比長線大，金額要更保守。`,
-  ];
-  const lo = (a, b, k) => [a?.[k], b?.[k]].filter((x) => x != null).reduce((m, x) => Math.min(m, x), Infinity) || null;
-  const kpi = (lab, v, note, suf = "%") => `<div class="card"><div class="lbl">${lab}</div><div class="val">${v ?? "—"}${v != null ? suf : ""}</div><div class="note">${note}</div></div>`;
+// ---------- 第二步：選股與買點
+function renderStep2Info() {
+  const s2 = state.data.step2 || {};
   $("#ruleInfo").innerHTML = `<div class="rulebox">
-    <div><b>${esc(r.t)}</b>　<span class="note">持有約 ${isL ? "3 個月" : "1 個月"}・上方切換「短線 / 長線」可換策略</span></div>
-    <div class="market">
-      ${kpi("今天符合條件", nC, "精選照下面的規則挑", " 檔")}
-      ${kpi(`照規則挑 ${r.n} 檔：組合贏過大盤`, lo(bt?.top_train, bt?.top_test, "basket_win"), "大盤 = 同期所有評分股票的中位數")}
-      ${kpi(`照規則挑 ${r.n} 檔：組合賺錢`, lo(bt?.top_train, bt?.top_test, "basket_pos"), `最差一期 ${bt?.top_train ? signed(Math.min(bt.top_train.worst, bt.top_test?.worst ?? 0), 1) : "—"}`)}
-      ${kpi(`自己從候選隨便挑 ${r.n} 檔：組合賺錢`, lo(bt?.rand_train, bt?.rand_test, "basket_pos"), "不一定要照外資排序")}
-    </div>
-    <p class="note">上面的勝率取訓練期與驗證期<b>較低</b>的那個（保守估計）；驗證期剛好是大多頭，數字偏漂亮，不要當常態。</p>
-    <p style="margin:10px 0 0">下表${state.pickAll ? `是全部 ${nC} 檔候選（依目前排序）` : `是照規則挑出的 ${r.n} 檔`}。
-      <button class="ghost sm" id="pickAllBtn">${state.pickAll ? "只看精選 " + r.n + " 檔" : `顯示全部 ${nC} 檔候選`}</button></p>
-    <details><summary>操作 SOP（自己用任何看盤軟體也能照做）</summary><ol class="sop">${steps.map((x) => `<li>${x}</li>`).join("")}</ol></details>
-    <details><summary>回測明細（訓練期 vs 驗證期）</summary>
-      <table class="kv" style="max-width:640px"><tr><td></td><td>訓練期</td><td>驗證期</td></tr>
-        ${row("候選股個股勝率（贏過大盤中位數）", bt?.train, bt?.test, "win")}
-        ${row(`從候選隨便挑 ${r.n} 檔：組合贏過大盤`, bt?.rand_train, bt?.rand_test, "basket_win")}
-        ${row(`從候選隨便挑 ${r.n} 檔：組合賺錢`, bt?.rand_train, bt?.rand_test, "basket_pos")}
-        ${row(`照規則挑 ${r.n} 檔：組合贏過大盤`, bt?.top_train, bt?.top_test, "basket_win")}
-        ${row(`照規則挑 ${r.n} 檔：組合賺錢`, bt?.top_train, bt?.top_test, "basket_pos")}
-        <tr><td>最差一期（照規則 ${r.n} 檔）</td><td>${bt?.top_train ? signed(bt.top_train.worst, 1) : "—"}</td><td>${bt?.top_test ? signed(bt.top_test.worst, 1) : "—"}</td></tr>
-      </table>
-      <p class="note"><b>不是每週定期定額</b>：回測把 2024/10 起的每一週都當成「可能的開始日」各算一次，確認哪一週開始都差不多。實際操作是<b>一次買進、每 3 個月（短線每 1 個月）檢查換股</b>。只用當時已公布的資料；${bt?.top_test ? `驗證期共 ${bt.top_test.periods} 期` : ""}。這段期間是 AI 多頭，風格轉換時勝率可能下降。止損規則沒有回測過，未納入。</p></details>
-  </div>`;
-  $("#pickAllBtn").onclick = () => { state.pickAll = !state.pickAll; render(); };
+    <b>② 選股與買點</b>　<span class="note">從第一步的前段族群裡挑股票，再看買點</span>
+    <ol class="sop">
+      <li><b>族群</b>：產業族群前 5 名（${(s2.ind || []).map(esc).join("、") || "—"}），加上 AI 環節前 3 名（${(s2.ai || []).map(esc).join("、") || "—"}）。</li>
+      <li><b>個股條件</b>：市值 ≥ 100 億、營收預估本月仍在上修、沒有過熱；依三步驟分數排序（基本面 65%、技術面 20%、籌碼面 15%）。</li>
+      <li><b>買點（本益比位階）</b>：<span class="chip good">便宜 &lt; −0.5σ</span> 可分批買進；<span class="chip neutral">合理 ±0.5σ</span> 小量分批；<span class="chip warn">偏貴 &gt; +0.5σ</span> 等回到合理區。</li>
+      <li><b>技術面</b>：站上季線但距離 ≤ 15% 最理想；離季線太遠就不追，等回檔到支撐附近再分批。</li>
+    </ol>
+    <p class="note">這套架構正在用 2018 年以來的資料驗證（研究 3），驗證前請當參考；建議以 0050 為主，這裡的股票只用一小部分資金。點 ☆ 加入第三步的持股監控。</p></div>`;
 }
 
-// ---------- 自選股勝率推估
-async function loadPool() {
-  if (state.pool !== undefined) return state.pool;
-  try { state.pool = await (await fetch("data/pool.json", { cache: "no-cache" })).json(); } catch { state.pool = null; }
-  return state.pool;
+// ---------- 第三步：持股監控
+function holdAdvice(s) {
+  const m = s.m, out = [];
+  let act = "續抱", cls = "neutral";
+  if (m.rev_up_n === 0) out.push(["warn", "營收預估本月下修"]);
+  if (m.accel != null && m.accel <= -10) out.push(["warn", `營收動能轉弱（${m.accel.toFixed(0)}）`]);
+  if (m.over) out.push(["warn", "過熱（乖離過大）"]);
+  if (m.pe_z != null && m.pe_z > 1.5) out.push(["warn", `本益比極貴（+${m.pe_z}σ）`]);
+  if (m.sup_broke) out.push(["warn", `跌破前波低點 ${m.sup_last}`]);
+  if (m.news_dn) out.push(["warn", `法人下調 ${m.news_dn} 則`]);
+  if (m.rev_up_n >= 1) out.push(["good", `營收預估上修中（${m.rev_up_n} 個月）`]);
+  if (m.pe_zone === "cheap") out.push(["good", `本益比便宜（${m.pe_z}σ）`]);
+  if (m.news_up) out.push(["good", `法人上調 ${m.news_up} 則`]);
+  const weak = (m.rev_up_n === 0 ? 1 : 0) + (m.accel != null && m.accel <= -10 ? 1 : 0);
+  if (weak >= 2) { act = "檢討出場：上修中斷且動能轉弱"; cls = "warn"; }
+  else if (m.over || (m.pe_z != null && m.pe_z > 1.5)) { act = "考慮停利一部分"; cls = "warn"; }
+  else if (m.rev_up_n >= 1 && m.pe_zone === "cheap") { act = "可加碼（上修中＋便宜）"; cls = "good"; }
+  else if (m.rev_up_n === 0) { act = "觀察：預估下修一個月"; cls = "warn"; }
+  return { act, cls, out };
 }
-const bandIdx = (bands, v) => bands.reduce((b, lo, i) => (v >= lo ? i : b), 0);
-
-const aggCache = {};
-function estOne(pool, strat, s) {
-  // 單股：同分數區間（且同樣符合 / 不符合策略條件）的全期統計
-  const P = pool[strat], bands = pool.bands;
-  const agg = aggCache[strat] ||= bands.map((_, i) => P.flatMap((per) => per[i]));
-  const rid = strat === "long" ? "long_core" : "short_core";
-  const b = bandIdx(bands, s.s.score);
-  const hit = (s.m.rules || []).includes(rid) ? 1 : 0;
-  const same = agg[b].filter((x) => x[2] === hit);
-  const useHit = same.length >= 300;              // 樣本夠才細分
-  const xs = useHit ? same : agg[b];
-  return { s, b, hit, useHit, n: xs.length, win: xs.filter((x) => x[0] > 0).length / xs.length * 100,
-    pos: xs.filter((x) => x[1] > 0).length / xs.length * 100, avg: xs.reduce((a, x) => a + x[1], 0) / xs.length / 10 };
-}
-
-function estimate(pool, strat, stocks) {
-  const P = pool[strat], bands = pool.bands;
-  const one = stocks.map((s) => estOne(pool, strat, s));
-  let seed = 20241001;                              // 固定種子：同樣的自選股每次結果一致
-  const rand = () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-  // 組合：隨機抽歷史時間點，每檔從該期同區間抽一檔（保留同期股票一起漲跌的相關性）
-  const pick = (per, o) => {
-    for (let d = 0; d < bands.length; d++) for (const k of [o.b - d, o.b + d]) {
-      if (!per[k]?.length) continue;
-      const c = o.useHit ? per[k].filter((x) => x[2] === o.hit) : per[k];
-      const arr = c.length ? c : per[k];
-      return arr[Math.floor(rand() * arr.length)];
-    }
-    return null;
-  };
-  const ex = [], ret = [];
-  for (let it = 0; it < 4000; it++) {
-    const per = P[Math.floor(rand() * P.length)];
-    let se = 0, sr = 0, n = 0;
-    for (const o of one) { const x = pick(per, o); if (x) { se += x[0]; sr += x[1]; n++; } }
-    if (n) { ex.push(se / n / 10); ret.push(sr / n / 10); }
-  }
-  ret.sort((a, b) => a - b);
-  const q = (p) => ret[Math.floor(p * (ret.length - 1))];
-  return { one, win: ex.filter((x) => x > 0).length / ex.length * 100, pos: ret.filter((x) => x > 0).length / ret.length * 100,
-    avg: ret.reduce((a, x) => a + x, 0) / ret.length, p10: q(0.1), p50: q(0.5), p90: q(0.9) };
-}
-
-async function renderWatchInfo() {
-  const box = $("#watchInfo");
-  const strat = state.strat, list = state.data.stocks.filter((s) => state.watch.has(s.c));
-  const scored = list.filter((s) => s.s.score != null), unscored = list.filter((s) => s.s.score == null);
-  if (!list.length) { box.innerHTML = ""; return; }
-  box.innerHTML = '<div class="rulebox"><p class="note">推估中…</p></div>';
-  const pool = await loadPool();
-  if (!pool || !pool[strat]) { box.innerHTML = '<div class="rulebox"><p class="note">推估資料還沒產生（需要先跑回測）。</p></div>'; return; }
-  if (!scored.length) { box.innerHTML = '<div class="rulebox"><p class="note">自選股都沒有分數（成交量不足或資料不足），無法推估。</p></div>'; return; }
-  if (state.tab !== "watch" || state.strat !== strat) return;   // 等待期間切走了
-  const r = estimate(pool, strat, scored), H = pool.h[strat];
-  const pc = (v) => `${v.toFixed(0)}%`;
-  box.innerHTML = `<div class="rulebox">
-    <b>自選股推估（${STRAT_NAME[strat]}：持有 ${H} 個交易日，約 ${strat === "long" ? "3 個月" : "1 個月"}）</b>
-    <span class="note">　上方切換短線 / 長線可換持有期間・自選股存在這台裝置的瀏覽器</span>
-    <div class="market">
-      <div class="card"><div class="lbl">組合贏過大盤（中位數）</div><div class="val">${pc(r.win)}</div><div class="note">${scored.length} 檔等金額</div></div>
-      <div class="card"><div class="lbl">組合賺錢機率</div><div class="val">${pc(r.pos)}</div><div class="note">平均報酬 ${signed(r.avg, 1)}</div></div>
-      <div class="card"><div class="lbl">報酬範圍（10% / 50% / 90%）</div><div class="val" style="font-size:18px">${signed(r.p10, 1)}　${signed(r.p50, 1)}　${signed(r.p90, 1)}</div>
-        <div class="note">10 次裡約有 1 次比左邊更差</div></div>
-    </div>
-    <table class="kv" style="margin-top:10px"><tr><td>股票</td><td>分數</td><td>贏過大盤</td><td>賺錢機率</td><td>歷史平均報酬</td><td>樣本</td></tr>
-      ${r.one.map((o) => `<tr><td><a href="#${o.s.c}" data-open="${o.s.c}">${o.s.c} ${esc(o.s.n)}</a>${o.hit ? ' <span class="flag good">符合策略</span>' : ""}${o.s.m.over ? ' <span class="flag warn">乖離過大</span>' : ""}</td>
-        <td>${o.s.s.score.toFixed(0)}（${pool.bands[o.b]}~${pool.bands[o.b + 1] ?? 100}${o.useHit ? (o.hit ? "、符合策略" : "、不符合策略") : ""}）</td><td>${pc(o.win)}</td><td>${pc(o.pos)}</td><td>${signed(o.avg, 1)}</td><td>${o.n.toLocaleString()}</td></tr>`).join("")}
+function renderStep3() {
+  const list = state.data.stocks.filter((s) => state.watch.has(s.c));
+  if (!list.length) { $("#watchInfo").innerHTML = '<div class="rulebox"><b>③ 持股監控</b><p class="note">還沒有持股。在第二步或任何清單點 ☆ 加入，這裡會每天檢查：上修是否持續、是否過熱該停利、是否便宜可加碼。</p></div>'; return; }
+  $("#watchInfo").innerHTML = `<div class="rulebox"><b>③ 持股監控</b>　<span class="note">每天收盤後更新；建議持有 3~5 年，這裡只在基本面或價格出現明顯變化時提醒</span>
+    <table class="kv" style="margin-top:8px"><tr><td>股票</td><td>建議</td><td>訊號</td></tr>
+    ${list.map((s) => { const a = holdAdvice(s); return `<tr><td><a href="#${s.c}" data-open="${s.c}">${s.c} ${esc(s.n)}</a></td>
+      <td><span class="chip ${a.cls}">${a.act}</span></td><td>${a.out.map(([c, t]) => `<span class="chip ${c}">${t}</span>`).join(" ") || NA}</td></tr>`; }).join("")}
     </table>
-    ${unscored.length ? `<p class="note">沒有分數、未納入推估：${unscored.map((s) => esc(s.n)).join("、")}（成交量不足或資料不足）</p>` : ""}
-    <p class="note">推估方式：用 2024/10 起的回測，找「同分數區間、且同樣符合／不符合策略條件」的股票後來的實際表現（樣本不足 300 時只看分數區間）。組合是隨機抽歷史時間點、每檔從同期同區間各抽一檔，模擬 4,000 次，
-      保留同期股票一起漲跌的特性。這是歷史統計，個股本身的消息（財報、事件）不在模型內；回測期間為 AI 多頭，風格轉換時可能失準。</p>
-  </div>`;
+    <p class="note"><b>出場</b>：營收預估下修且動能轉弱（當初買的理由消失）。<b>停利一部分</b>：乖離過大或本益比 &gt; +1.5σ。<b>加碼</b>：仍在上修且本益比 &lt; −0.5σ。
+      這些規則還沒經過回測驗證（研究中），先當提醒。</p></div>`;
 }
 
 let etfState = { kind: "", sort: "avgval", asc: false };
@@ -434,8 +308,8 @@ const zoneTag = (m) => m.pe_zone ? `<span class="chip ${ZONE[m.pe_zone][0]}" tit
 const upTag = (m) => m.rev_up_n == null ? NA : m.rev_up_n >= 3 ? `<span class="chip good">連續上修 ${m.rev_up_n} 月</span>` :
   m.rev_up_n >= 1 ? `<span class="chip neutral">上修 ${m.rev_up_n} 月</span>` : '<span class="chip warn">本月下修</span>';
 function renderTrend() {
-  const all = state.data.themes || {};
-  const names = Object.keys(all);
+  const all = { "產業族群": (state.data.groups || []).filter((g) => g.n >= 5), ...(state.data.themes || {}) };
+  const names = Object.keys(all).filter((k) => all[k]?.length);
   if (!names.length) { $("#page").innerHTML = '<div class="how"><p>趨勢資料還沒產生（下次每日更新後出現）。</p></div>'; return; }
   const th = state.theme && all[state.theme] ? state.theme : names[0];
   const rows = all[th];
@@ -446,8 +320,8 @@ function renderTrend() {
   const mem = seg ? seg.codes.map((c) => S[c]).filter(Boolean).sort((a, b) => (b.s.score ?? 0) - (a.s.score ?? 0)) : [];
   $("#page").innerHTML = `
     <div class="filters"><span class="seg" id="themeSeg">${names.map((n) => `<button data-t="${esc(n)}" class="${n === th ? "on" : ""}">${esc(n)}</button>`).join("")}</span>
-      <span class="note">第一步：找出趨勢裡最強的環節 → 環節龍頭 → 確認營收預估在上修 → 第二步看本益比位階</span></div>
-    <div class="tablebox"><table><thead><tr><th class="l">環節（點選看成員）</th><th>環節分數</th><th>近3月營收年增</th><th>營收創新高</th><th>預估連續上修≥2月</th><th>營收動能</th><th>距季線</th><th class="l">龍頭</th></tr></thead>
+      <span class="note">① 先看族群分數，前段族群才往下看：族群內領先的公司 → 營收預估是否持續上修 → ② 本益比位階</span></div>
+    <div class="tablebox"><table><thead><tr><th class="l">族群 / 環節（點選看成員）</th><th>族群分數</th><th>近3月營收年增</th><th>營收創新高</th><th>預估連續上修≥2月</th><th>營收動能</th><th>距季線</th><th class="l">龍頭</th></tr></thead>
       <tbody>${rows.map((r, i) => { const L = S[r.lead]; return `<tr data-seg="${esc(r.seg)}" class="${r.seg === open ? "sel" : ""}">
         <td class="l"><b>${i + 1}. ${esc(r.seg)}</b> <span class="na">${r.n} 家</span></td><td>${bar(r.seg_score)}</td>
         <td>${signed(r.rev3, 0)}</td><td>${r.hi_pct ?? "—"}%</td><td>${r.up_pct ?? "—"}%</td><td>${signed(r.accel, 1, "")} ${arrow(r)}</td><td>${signed(r.b60, 1)}</td>
@@ -523,55 +397,28 @@ function renderBacktest() {
 }
 
 function renderHow() {
-  const w = state.data.weights;
-  const pct = (x) => Math.round(x * 100) + "%";
-  const list = (o) => Object.entries(o).map(([k, v]) => `<tr><td>${LABEL[k] || k}</td><td>${pct(v)}</td></tr>`).join("");
   $("#page").innerHTML = `<div class="how">
-    <h3>分數怎麼來的：依回測結果設計</h3>
-    <p>2024/10~2026/10 的回測（只用當時已公布的資料）中，<b>有預測力的是這四類</b>：營收成長（連續年增、營收創 12 個月新高、動能）、流動性（成交金額規模）、
-       成長性價比（PEG：營收成長 ÷ 本益比）、外資持股比例。外資 20 日買超在修正重疊後不顯著，改用持股比例（排名）。單看河流圖便不便宜、支撐位置、趨勢、量能、投信都沒有預測力，因此<b>不計分</b>，但仍顯示在個股頁供參考。</p>
-    <p><b>只有一個綜合分數</b>：短線（20 日）與長線（60 日）回測找到的有效指標完全相同，分開算的兩個分數相關係數 0.99，所以合併。
-       短線、長線的差別在「選股規則」：進場條件與持有天數（見策略選股頁）。</p>
-    <table><tr><th>面向</th><th>權重</th></tr>
-      ${["fund", "liq", "peg", "chip"].map((k) => `<tr><td>${{ fund: "營收成長（連續年增、創 12 月新高、動能）", liq: "流動性（20 日均成交金額排名）", peg: "成長性價比（近 3 月營收年增 ÷ 本益比，排名）", chip: "外資持股比例（排名）" }[k]}</td>
-        <td>${w.strats.score[k] ? pct(w.strats.score[k]) : "—"}</td></tr>`).join("")}</table>
-    <p class="note">持有天數也測過：5、10 日勝率只有約 60%（雜訊大），20 日以上才穩定；60 日與 120 日年化報酬接近，但 120 日最差一期更深，所以長線維持 60 日。
-       「大盤在季線上才進場」的濾網也測過：最差一期略淺，但平均報酬變少，不採用。</p>
-    <p><b>乖離過大扣分</b>：20 日乖離 &gt; +20% 或季線乖離 &gt; +50% 的股票，回測中勝率掉到 50% 上下（雖然有些會繼續噴，但等於丟銅板），分數扣 15 分、也不列入策略選股。
-       短線選股另外要求股價在 20 日線下（回檔才買），回測勝率較穩定。</p>
-    <p><b>營收創新高</b> = 最新一個月營收 ÷ 前 12 個月最高的月營收 − 1，≥ 0 代表創新高。這是新加入的指標中預測力最強的。<br>
-       <b>PEG</b> 這裡用「近 3 月營收年增率 ÷ 本益比」，數字越大代表每一倍本益比買到的成長越多；虧損（沒有本益比）的公司沒有這項。</p>
-    <p class="note">回測期間是 AI 多頭行情，大型成長股表現特別好；市場風格轉換時，這些規律可能減弱。分數與勝率請當參考，不是保證。</p>
-    <h3>支撐位置（參考）</h3>
-    <p><b>前波支撐</b>：近 130 個交易日內的波段低點（前後各 10 日內最低）。收盤價跌破最近一個波段低點 = <b>破前低</b>，分數直接給很低。<br>
-       <b>大量支撐</b>：把近 130 日的成交金額依價位分 24 格（分價量表），成交特別多的價位代表很多人在那裡買，常成為支撐或壓力。<br>
-       分數依「離支撐多近」給分：沒跌破且在支撐上方 3% 內 100 分、6% 內 85、10% 內 65、15% 內 45，更遠 30。兩種支撐各算一次取平均。</p>
-    <h3>估值（參考）</h3><table>${list(w.value)}</table>
-    <p class="note">本益比來自證交所，用的是「已正式申報」的近四季 EPS。財報季期間（法說會後到申報期限前），高成長股的本益比會暫時偏高，申報後自動修正。
-       <b>預估本益比（Forward PE）</b>：沒有免費的法人預估，改用「近四季 EPS ×（1 + 預估成長率）」推估未來 12 個月 EPS，
-       成長率 = 近 3 月與近 12 月營收年增率平均（限制在 −50%~+80%），假設利潤率不變。估值分數用預估本益比在自己 5 年本益比歷史中的位階，直接換算（位階 30% = 70 分）。
-       建材營造、金融保險業的營收與獲利關係不穩定，改用一般本益比位階。</p>
-    <p>每一項指標（支撐位置除外）先在「列入評分的股票」裡排名，換成 0~100 的百分位（贏過多少比例的股票），再依權重加總。
-       分數是<b>相對排名</b>：70 分代表綜合起來贏過約七成的股票，不是「70% 機率會漲」。</p>
-    <p>列入評分：一般上市、上櫃股票（排除 ETF，上櫃股名稱旁標「櫃」），且近 20 日平均成交金額 ≥ ${(state.data.min_avg_value / 1e8).toFixed(1)} 億。某項資料缺漏時，用其餘指標重新分配權重。</p>
-    <h3>營收成長</h3><table>${list(w.fund)}</table>
-    <p class="note"><b>營收動能</b> = 近 3 個月營收年增率 − 近 12 個月營收年增率。正值代表成長在加速，負值代表成長在放緩；
-       ≤ −10 會標示「動能轉弱」，可視為營收預期可能下修的訊號。<br>
-       <b>全年營收推估</b> = 今年已公布的累計營收 + 去年剩餘月份營收 ×（1 + 近 3 月年增率）。這是簡單外推，不是法人預估。</p>
-    <h3>外資持股</h3><table>${list(w.chip)}</table>
-    <p class="note">買超比例 = 期間內法人買超股數 ÷ 同期間總成交股數，大型股小型股才能公平比較。</p>
-    <h3>趨勢（參考）</h3><table>${list(w.tech)}</table>
-    <h3>本益比位階與河流圖</h3>
-    <p>每月取樣一次本益比，共 5 年。位階 = 歷史取樣中比現在低的比例。河流圖的各條線 = 歷史本益比的 10/30/50/70/90 百分位 × 當時的近四季 EPS（由收盤價 ÷ 本益比反推）。
-       股價在下緣代表以自己的歷史看偏便宜，上緣代表偏貴。</p>
-    <h3>價值股清單</h3>
-    <p>河流圖位階（有預估用預估）≤ ${VALUE_PEPOS}%、本益比 &gt; 0、營收動能沒有轉弱，依長線分數排序。</p>
+    <h3>這個網站的用法：三步驟</h3>
+    <p><b>① 趨勢族群</b>：先看族群分數，只往下看前段族群。族群分數 = 族群內公司的近 3 月營收年增中位數 30%、營收創 12 個月新高的比例 25%、營收動能 20%、營收預估連續上修 ≥ 2 個月的比例 25%（族群之間排名）。
+       「產業族群」用證交所產業分類；AI 等趨勢用人工整理的產業鏈環節（data/themes.json，可自行修改）。</p>
+    <p><b>② 選股與買點</b>：前段族群裡，市值 ≥ 100 億、營收預估仍在上修、沒過熱的公司，依三步驟分數排序；再用本益比位階決定買點。</p>
+    <p><b>③ 持股監控</b>：☆ 加入的股票每天檢查上修是否持續、是否過熱、是否便宜可加碼，持有 3~5 年。</p>
+    <h3>三步驟分數</h3>
+    <table><tr><th>面向</th><th>權重</th><th>內容</th></tr>
+      <tr><td>基本面</td><td>65%</td><td>營收預估連續上修月數 30%、近 3 月上修幅度 20%、營收距 12 月新高 20%、營收動能 15%、營收連續年增 15%（季報獲利能力累積後加入）</td></tr>
+      <tr><td>技術面</td><td>20%</td><td>站上季線但 ≤ 15%（不追高）、接近支撐（分批買進）</td></tr>
+      <tr><td>籌碼面</td><td>15%</td><td>外資持股 4 週變化 40%、集保大戶持股 4 週變化 30%、負乖離 30%</td></tr></table>
+    <p class="note">各項先在全部股票中排名（0~100），再依權重加總；乖離過大扣 15 分。分數是相對排名，不是上漲機率。這套權重是依你的投資架構設定，正在用 2018 年以來的資料驗證。</p>
+    <h3>營收預估上修</h3>
+    <p>每月新營收公布後，用「近 12 個月營收 ×（1 + 近 3 個月年增率）」推估未來 12 個月營收；比上個月的推估高就是上修。從營收出發，不受業外一次性收益影響；但這是外推，不是法人預估，會比法人慢 1~2 個月。</p>
+    <h3>本益比位階（買點）</h3>
+    <p>取自己 5 年的月本益比（取對數）算平均與標準差：&lt; −0.5σ 便宜、−0.5σ ~ +0.5σ 合理、&gt; +0.5σ 偏貴。用近四季 EPS 的本益比和歷史比較才公平；預估本益比在個股頁列為參考。</p>
+    <h3>消息</h3>
+    <p class="note">法說會行事曆來自公開資訊觀測站；「法人調升目標價、上修財測」來自 Google 新聞標題自動比對，可能誤判，只當參考、不計分。集保大戶持股每週記錄，累積後才有變化值。</p>
     <h3>使用小技巧</h3>
-    <p>☆ 加入自選股（存在這台裝置的瀏覽器裡，手機和電腦要各自加）。快速篩選與進階篩選會記住，作用在「分數排行、價值股、選股器」；策略選股與自選股不受篩選影響。網址加上 <code>#2330</code> 可直接打開個股。</p>
-    <p class="note">評分公式改版時，分數歷史會重新累積，「5 日分數變化」要累積 6 個交易日後才會出現。</p>
+    <p>☆ 加入持股監控（存在這台裝置的瀏覽器裡）。網址加上 <code>#2330</code> 可直接打開個股。</p>
     <h3>資料狀態</h3>
-    <p class="note">收盤價 ${state.data.price_days} 個交易日、法人買賣超 ${state.data.t86_days} 個交易日、本益比月取樣 ${state.data.pe_months} 個月。
-       每個交易日台灣時間約 18:30 自動更新。</p></div>`;
+    <p class="note">收盤價 ${state.data.price_days} 個交易日、法人買賣超 ${state.data.t86_days} 個交易日、本益比月取樣 ${state.data.pe_months} 個月。每個交易日台灣時間約 18:30 自動更新。本頁不是投資建議。</p></div>`;
 }
 
 function render() {
@@ -583,14 +430,13 @@ function render() {
   $("#adv").hidden = !canF || !state.advOpen;
   ["#preset", "#advBtn", "#resetBtn"].forEach((x) => ($(x).hidden = !canF));
   $("#page").hidden = isList;
-  $("#ruleInfo").hidden = t !== "pick";
+  $("#ruleInfo").hidden = t !== "step2";
   $("#watchInfo").hidden = t !== "watch";
-  if (t === "watch") renderWatchInfo();
-  if (t === "pick") renderRuleInfo();
+  if (t === "watch") renderStep3();
+  if (t === "step2") renderStep2Info();
   if (isList) renderTable();
   else if (t === "etf") renderETF();
   else if (t === "trend") renderTrend();
-  else if (t === "ind") renderIndustries();
   else if (t === "bt") renderBacktest();
   else renderHow();
   $("#watchN").textContent = state.watch.size ? `(${state.watch.size})` : "";
@@ -599,21 +445,9 @@ function render() {
 function setTab(t) {
   state.tab = t;
   $$("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
-  if (DEFAULT_SORT[t]) {
-    [state.sort, state.asc] = DEFAULT_SORT[t];
-    if (state.sort === "$strat") state.sort = state.strat;
-  }
+  if (DEFAULT_SORT[t]) [state.sort, state.asc] = DEFAULT_SORT[t];
   render();
 }
-
-function setStrat(k) {
-  state.strat = k;
-  LS.set("strat", k);
-  $$("#strat button").forEach((b) => b.classList.toggle("on", b.dataset.s === k));
-  renderMarket();
-  render();
-}
-
 
 function toggleWatch(code) {
   state.watch.has(code) ? state.watch.delete(code) : state.watch.add(code);
@@ -640,27 +474,30 @@ async function showDetail(code) {
     <div class="dtop">
       <div>
         <div class="bigwrap">
-          <div class="cur"><span class="big">${s.s.score == null ? "—" : s.s.score.toFixed(0)}</span><span class="sub">綜合分數 ${s.s.d5 != null ? "5日 " + signed(s.s.d5, 1, "") : ""}</span></div>
+          <div class="cur"><span class="big">${s.s.score == null ? "—" : s.s.score.toFixed(0)}</span><span class="sub">三步驟分數 ${s.s.d5 != null ? "5日 " + signed(s.s.d5, 1, "") : ""}</span></div>
         </div>
-        <div class="subscores">${sub("營收成長", s.s.fund)}${sub("流動性", s.s.liq)}${sub("PEG", s.s.peg)}${sub("外資持股", s.s.chip)}
-          <div class="note" style="margin:8px 0 2px">參考（回測無預測力，不計分）</div>${sub("估值", s.s.value)}${sub("支撐位置", s.s.sup)}${sub("趨勢", s.s.tech)}</div>
-        ${(m.rules || []).map((r) => `<span class="chip good">符合${r === "long_core" ? "長線核心" : "短線"}選股規則</span>`).join(" ")}
+        <div class="subscores">${sub("基本面 65%", s.s.f)}${sub("技術面 20%", s.s.t)}${sub("籌碼面 15%", s.s.c)}</div>
       </div>
       <div class="pricebox"><div class="val">${fmt(m.p)}</div><div>${signed(m.chg)} 今日</div><div>${signed(m.r20, 1)} 20 日</div></div>
     </div>
+    <table class="kv steps">
+      <tr><td>① 族群</td><td>${grpLine(s)}</td></tr>
+      <tr><td>① 營收預估</td><td>${upTag(m)} ${m.rev_rev3 != null ? `近 3 個月 ${signed(m.rev_rev3, 1)}` : ""}${m.rev_hi != null && m.rev_hi >= 0 ? ' <span class="chip good">月營收創 12 月新高</span>' : ""}</td></tr>
+      <tr><td>② 買點</td><td>${zoneTag(m)} ${m.b60 != null ? `<span class="note">距季線 ${signed(m.b60, 1)}${m.b60 > 15 ? "（離季線遠，不追）" : ""}</span>` : ""}</td></tr>
+      <tr><td>③ 監控</td><td>${(() => { const a = holdAdvice(s); return `<span class="chip ${a.cls}">${a.act}</span>`; })()}</td></tr>
+    </table>
     <div class="chips">${chips}</div>
-    <div id="estBox"></div>
 
-    <h3>股價與支撐（近 ${"130"} 個交易日）</h3><div id="chPrice" class="chartbox"></div>
+    <h3>營收預估修正（①）</h3><div id="chEst" class="chartbox"></div>
+    <div id="newsBox"></div>
+    <h3>月營收</h3><div id="chRev" class="chartbox"></div>
+    <h3>本益比河流圖（②：標準差位階）</h3><div id="chRiver" class="chartbox"></div>
+    <h3>股價與支撐（近    <h3>股價與支撐（近 ${"130"} 個交易日）</h3><div id="chPrice" class="chartbox"></div>
     <div class="supbox">${supportHtml(m)}</div>
     <h3>分價量表（哪個價位成交最多）</h3><div id="chVP" class="chartbox"></div>
     <h3>法人買賣超（張）
       <span class="seg" id="segT86"><button data-k="f" class="on">外資</button><button data-k="i">投信</button><button data-k="s">自營商</button><button data-k="all">合計</button></span></h3>
     <div id="chT86" class="chartbox"></div>
-    <h3>營收預估修正（第一步）</h3><div id="chEst" class="chartbox"></div>
-    <div id="newsBox"></div>
-    <h3>本益比河流圖（第二步：標準差位階）</h3><div id="chRiver" class="chartbox"></div>
-    <h3>月營收</h3><div id="chRev" class="chartbox"></div>
     <h3>分數走勢</h3><div id="chScore" class="chartbox"></div>
 
     <div class="cols2">
@@ -710,15 +547,6 @@ async function showDetail(code) {
   $("#backdrop").hidden = false;
   $("#detail").scrollTop = 0;
   $("#closeDetail").onclick = closeDetail;
-  loadPool().then((pool) => {
-    if (!pool || $("#detail").hidden) return;
-    $("#estBox").innerHTML = ["short", "long"].filter((k) => s.s.score != null && pool[k]).map((k) => {
-      const o = estOne(pool, k, s);
-      return `<p class="note">${STRAT_NAME[k]}（持有 ${pool.h[k]} 日）：歷史上同分數區間${o.useHit ? (o.hit ? "、且符合策略" : "、且不符合策略") : ""}的股票，
-        贏過大盤 <b>${o.win.toFixed(0)}%</b>、賺錢 ${o.pos.toFixed(0)}%、平均報酬 ${signed(o.avg, 1)}（樣本 ${o.n.toLocaleString()}）</p>`;
-    }).join("");
-  });
-
   let det;
   try {
     det = await (await fetch(`data/s/${code}.json`, { cache: "no-cache" })).json();
@@ -741,6 +569,18 @@ async function showDetail(code) {
   drawScore(det);
 }
 
+function grpLine(s) {
+  const g = (state.data.groups || []).filter((x) => x.n >= 5);
+  const i = g.findIndex((x) => x.seg === s.ind);
+  const parts = [];
+  if (i >= 0) parts.push(`${esc(s.ind)}：第 ${i + 1} / ${g.length} 名（族群分數 ${g[i].seg_score?.toFixed(0)}）`);
+  for (const [th, rows] of Object.entries(state.data.themes || {})) {
+    const j = rows.findIndex((r) => r.codes.includes(s.c));
+    if (j >= 0) parts.push(`${esc(th)}・${esc(rows[j].seg)}：第 ${j + 1} / ${rows.length} 名${rows[j].lead === s.c ? '　<span class="flag good">龍頭</span>' : ""}`);
+  }
+  return parts.join("<br>") || NA;
+}
+
 function supportHtml(m) {
   const rows = [];
   if (m.sup_last != null) rows.push(`<div><span class="lbl">前波低點</span><b>${m.sup_last}</b>（${m.sup_last_d} 個交易日前）${m.sup_broke ? '　<span class="flag warn">已跌破</span>' : '　<span class="flag good">未跌破</span>'}</div>`);
@@ -751,19 +591,10 @@ function supportHtml(m) {
   return rows.join("") || '<p class="note">價格資料不足，無法判斷支撐。</p>';
 }
 
-function riverZone(m) {
-  const p = m.fpe_pos ?? m.pe_pos;
-  if (p == null) return null;
-  return p <= 10 ? ["good", "河流圖：非常便宜"] : p <= 30 ? ["good", "河流圖：偏便宜"] : p <= 70 ? ["neutral", "河流圖：合理"]
-    : p <= 90 ? ["warn", "河流圖：偏貴"] : ["warn", "河流圖：非常貴"];
-}
-
 function signals(s) {
   const m = s.m, out = [];
   if (m.over) out.push(["warn", `乖離過大（月乖離 ${m.b20 > 0 ? "+" : ""}${m.b20?.toFixed(1)}%、季線乖離 ${m.b60 > 0 ? "+" : ""}${m.b60?.toFixed(1)}%）：回測勝率約 50%，分數已扣 15`]);
   else if (m.b20 != null && m.b20 < 0) out.push(["neutral", `回檔中（月乖離 ${m.b20.toFixed(1)}%）`]);
-  const rz = riverZone(m);
-  if (rz) out.push([rz[0], `${rz[1]}（${m.fpe_pos != null ? "預估" : ""}位階 ${(m.fpe_pos ?? m.pe_pos).toFixed(0)}%）`]);
   if (m.sup_broke) out.push(["warn", `跌破前波低點 ${m.sup_last}`]);
   else if (m.sup_dist != null && m.sup_dist <= 4) out.push(["good", `貼近支撐 ${m.sup}（${m.sup_dist.toFixed(1)}%）`]);
   if (m.vsup_dist != null && m.vsup_dist <= 5) out.push(["good", `站在大量支撐 ${m.vsup} 上`]);
@@ -774,9 +605,8 @@ function signals(s) {
   }
   if (m.streak >= 6) out.push(["good", `營收連續 ${m.streak} 個月年增`]);
   if (m.est_growth != null) out.push([m.est_growth >= 0 ? "neutral" : "warn", `全年營收推估 ${m.est_growth > 0 ? "+" : ""}${m.est_growth.toFixed(1)}%`]);
-  if (m.t20 >= 1) out.push(["good", "投信 20 日明顯買超"]);
-  if (m.f20 >= 5) out.push(["good", "外資 20 日大買"]);
-  if (m.f20 <= -5) out.push(["warn", "外資 20 日大賣"]);
+  if (m.qd4 != null && Math.abs(m.qd4) >= 1) out.push([m.qd4 > 0 ? "good" : "warn", `外資持股 4 週 ${m.qd4 > 0 ? "+" : ""}${m.qd4} 個百分點`]);
+  if (m.big400_chg != null && Math.abs(m.big400_chg) >= 1) out.push([m.big400_chg > 0 ? "good" : "warn", `大戶持股 4 週 ${m.big400_chg > 0 ? "+" : ""}${m.big400_chg} 個百分點`]);
   if (m.b60 != null && m.b60 < 0) out.push(["neutral", "股價在季線下"]);
   const d5 = s.s.d5;
   if (d5 >= 10) out.push(["good", "近 5 日分數大幅進步"]);
@@ -912,7 +742,7 @@ document.addEventListener("click", (e) => {
     toggleWatch(st.dataset.star);
     $$(`[data-star="${st.dataset.star}"]`).forEach((b) => { const on = state.watch.has(st.dataset.star); b.classList.toggle("on", on); b.textContent = on ? "★" : "☆"; });
     $("#watchN").textContent = state.watch.size ? `(${state.watch.size})` : "";
-    if (state.tab === "watch") { renderTable(); renderWatchInfo(); }
+    if (state.tab === "watch") { renderTable(); renderStep3(); }
     return;
   }
   const op = e.target.closest("[data-open]");
@@ -939,7 +769,6 @@ $("#preset").addEventListener("change", (e) => {
   if (p) { setFilters(p.f); if (!FILTER_TABS.has(state.tab)) setTab("screen"); }
   e.target.value = "";
 });
-$("#strat").onclick = (e) => { const b = e.target.closest("button"); if (b) setStrat(b.dataset.s); };
 $("#advBtn").onclick = () => { state.advOpen = !state.advOpen; render(); };
 $("#resetBtn").onclick = () => { $("#q").value = ""; $("#ind").value = ""; setFilters({}); };
 $("#adv").addEventListener("input", (e) => {
@@ -972,12 +801,11 @@ fetch("data/latest.json", { cache: "no-cache" })
     const inds = [...new Set(d.stocks.map((s) => s.ind).filter(Boolean))].sort();
     $("#ind").insertAdjacentHTML("beforeend", inds.map((i) => `<option>${esc(i)}</option>`).join(""));
     $("#preset").insertAdjacentHTML("beforeend", Object.entries(PRESETS).map(([k, p]) => `<option value="${k}">${p.t}</option>`).join(""));
-    $$("#strat button").forEach((b) => b.classList.toggle("on", b.dataset.s === state.strat));
     fetch("data/backtest.json", { cache: "no-cache" }).then((r) => r.ok ? r.json() : null).then((b) => { state.bt = b; render(); }).catch(() => {});
     renderMarket();
     renderAdv();
     const qt = new URLSearchParams(location.search).get("tab");
-    setTab(qt && (TABCOLS[qt] || ["trend", "etf", "ind", "bt", "how"].includes(qt)) ? qt : "pick");
+    setTab(qt && (TABCOLS[qt] || ["trend", "etf", "bt", "how"].includes(qt)) ? qt : "trend");
     const c = location.hash.slice(1);
     if (c) showDetail(c);
   })

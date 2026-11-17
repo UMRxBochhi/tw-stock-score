@@ -66,7 +66,7 @@ def is_over(m: dict) -> bool:
     return (m.get("b20") or 0) > OVER_B20 or (m.get("b60") or 0) > OVER_B60
 
 
-SCORE_VER = 5          # 評分公式版本（改公式就 +1，分數歷史會重新累積）
+SCORE_VER = 6          # 評分公式版本（改公式就 +1，分數歷史會重新累積）
 RULE_MIN_VALUE = 1e9   # 20 日均成交金額 10 億
 
 
@@ -526,6 +526,79 @@ def fetch_qfii(d: date):
 
 
 _TWSE_CODES: list = []     # 上市代號（main 從最新收盤行情填入）
+
+
+# ---------------------------------------------------------------- 三步驟分數（使用者架構）
+# 基本面 65%：營收預估修正、成長性（獲利能力等季報歷史補齊後加入）
+# 技術面 20%：趨勢（站上季線但沒追高）、接近支撐（分批買、不追價）
+# 籌碼面 15%：外資持股 4 週變化、集保大戶持股 4 週變化、負乖離（不追高）
+STEP_W = {"f": 0.65, "t": 0.20, "c": 0.15}
+STEP_F = {"rev_up_n": .30, "rev_rev3": .20, "rev_hi": .20, "accel": .15, "streak": .15}
+STEP_C = {"qd4": .40, "big400_chg": .30, "-b20": .30}
+MIN_CAP = 1e10            # 第二步候選：市值至少 100 億
+
+
+def trend_ok(b60):
+    if b60 is None:
+        return None
+    return 100.0 if 0 <= b60 <= 15 else 60.0 if (-10 <= b60 < 0 or 15 < b60 <= 30) else 20.0
+
+
+def step_scores(stocks):
+    uni = [x for x in stocks if x["m"].get("liquid")]
+    def ranks(keys):
+        out = {}
+        for k in keys:
+            key, sign = k.lstrip("-"), (-1 if k.startswith("-") else 1)
+            out[k] = pct_rank({x["c"]: (x["m"][key] * sign if x["m"].get(key) is not None else None) for x in uni})
+        return out
+    rf, rc = ranks(STEP_F), ranks(STEP_C)
+    def comb(rk, W, c):
+        parts = [(rk[k][c], w) for k, w in W.items() if c in rk[k]]
+        tw = sum(w for _, w in parts)
+        return round(sum(v * w for v, w in parts) / tw * 100, 1) if tw >= 0.3 * sum(W.values()) else None
+    for x in uni:
+        m, c = x["m"], x["c"]
+        f = comb(rf, STEP_F, c)
+        t_parts = [v for v in (trend_ok(m.get("b60")), m.get("sup_score")) if v is not None]
+        t = round(sum(t_parts) / len(t_parts), 1) if t_parts else None
+        ch = comb(rc, STEP_C, c)
+        x["s"]["f"], x["s"]["t"], x["s"]["c"] = f, t, ch
+        parts = [(v, STEP_W[k]) for k, v in (("f", f), ("t", t), ("c", ch)) if v is not None]
+        if f is None or not parts:
+            x["s"]["score"] = None
+            continue
+        tw = sum(w for _, w in parts)
+        v = sum(a * w for a, w in parts) / tw
+        x["s"]["score"] = round(max(0.0, v - OVER_PENALTY) if is_over(m) else v, 1)
+
+
+def step2_list(stocks, groups_ind, groups_ai, n_ind=5, n_ai=3):
+    """第二步候選：前段族群（產業前 5、AI 環節前 3）→ 市值 ≥ 100 億 → 營收預估上修中 → 沒過熱 → 依分數排序"""
+    top_ind = [g["seg"] for g in groups_ind[:n_ind]]
+    top_ai = [g["seg"] for g in groups_ai[:n_ai]]
+    pool = {c: g["seg"] for g in groups_ind[:n_ind] for c in g["codes"]}
+    for g in groups_ai[:n_ai]:
+        for c in g["codes"]:
+            pool.setdefault(c, "AI：" + g["seg"])
+    S_ = {x["c"]: x for x in stocks}
+    rows = []
+    for c, grp in pool.items():
+        x = S_.get(c)
+        if not x or x["s"].get("score") is None:
+            continue
+        m = x["m"]
+        cap = m.get("cap")
+        if cap is not None and cap < MIN_CAP:
+            continue
+        if cap is None and (m.get("avgval") or 0) < 2e8:
+            continue
+        if (m.get("rev_up_n") or 0) < 1 or m.get("over"):
+            continue
+        m["grp"] = grp
+        rows.append(x)
+    rows.sort(key=lambda x: -x["s"]["score"])
+    return {"ind": top_ind, "ai": top_ai, "codes": [x["c"] for x in rows[:30]]}
 
 
 # ---------------------------------------------------------------- 第一步：營收預估上修、法說會、新聞
@@ -1352,6 +1425,25 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
             m["pct"] = {k: round(ranks[k][code] * 100) for k in keys if code in ranks[k]}
         stocks.append({"c": code, "n": names.get(code, ""), "ind": industry(code, rev), "mk": "o" if code in otc_now else "t",
                        "s": sc, "m": m})
+    # 市值、外資持股 4 週變化（三步驟分數用）
+    shares = {c: v[1] for c, v in ((qf_latest or {}).get("data") or {}).items() if v and len(v) > 1 and v[1]}
+    qf_old = {}
+    if qf_latest and qf_latest.get("date"):
+        cut = (datetime.strptime(qf_latest["date"], "%Y%m%d") - timedelta(days=28)).strftime("%Y%m%d")
+        for ym in sorted({cut[:6], qf_latest["date"][:6]}):
+            for d, rows in (hist_read("qf", ym) if (DATA / "hist").exists() else {}).items():
+                if d <= cut:
+                    qf_old = rows
+    for x in stocks:
+        m = x["m"]
+        if x["c"] in shares and m.get("p"):
+            m["cap"] = round(shares[x["c"]] * m["p"])
+        o = qf_old.get(x["c"])
+        if m.get("qf") is not None and o and o[0] is not None:
+            m["qd4"] = round(m["qf"] - o[0], 2)
+    for x in stocks:
+        x["s"]["score_bt"] = x["s"].get("score")      # 回測用的資料導向分數（驗證頁）
+    step_scores(stocks)
     stocks.sort(key=lambda x: (x["s"].get("score") is None, -(x["s"].get("score") or 0)))
 
     # 分數歷史 → 5 日分數變化（{日期: {代號: [短線, 長線]}}）
@@ -1467,7 +1559,10 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
         "stocks": stocks,
         "etfs": etfs,
         "rules": RULES,
-        "themes": theme_stats(themes or {}, stocks, qf_latest),
+        "themes": (th_ := theme_stats(themes or {}, stocks, qf_latest)),
+        "groups": (gr_ := theme_stats({"產業": {g: [x["c"] for x in stocks if x["ind"] == g and x["s"].get("score") is not None]
+                                                for g in {x["ind"] for x in stocks if x["ind"]}}}, stocks, qf_latest).get("產業", [])),
+        "step2": step2_list(stocks, [g for g in gr_ if g["n"] >= 5], th_.get("AI", [])),
         "picks": {rid: top_picks([(x["c"], x["m"]) for x in stocks], rid) for rid in RULES},
     }
 
