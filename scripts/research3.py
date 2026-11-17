@@ -496,6 +496,87 @@ def main():
                 name = f"{'台積電 40%＋' if core else ''}前 {N} 檔｜每產業{'最多 ' + str(K) + ' 檔' if K else '不限'}｜每 {E} 個月換"
                 out["diversified"][name] = res = div_test(N, K, E, core)
                 u.log(f"分散 {name}: " + json.dumps(res, ensure_ascii=False))
+    # ---- 門檻版：符合條件的股票每檔 per_w，其餘（或沒有符合時全部）放 0050；每 E 個月檢查一次
+    def thr_test(cond, per_w, E, K=None):
+        w = {}
+        eq = em = pk = 1.0
+        dd = 0.0
+        seg = {"train": [1.0, 1.0, 0], "test": [1.0, 1.0, 0]}
+        n_m = wins = zero = 0
+        n_q, sat = [], []
+        for n, idx in enumerate(reb):
+            t, snap = records[idx]
+            mk = snap.get("__mkt")
+            if not mk:
+                continue
+            H = lambda c: mk["hold"] if c == "__0050" else snap.get(c, {}).get("hold")
+            gone = sum(v for c, v in w.items() if H(c) is None)
+            w = {c: v for c, v in w.items() if H(c) is not None}
+            if gone:
+                w["__0050"] = w.get("__0050", 0) + gone
+            to = 0.0
+            if n % E == 0 or not w:
+                sc = user_score(snap, FUND, None, None)
+                q, cnt = [], {}
+                for c in sorted(sc, key=lambda c: -sc[c]):
+                    m = snap[c]
+                    if m.get("hold") is None or not cond(sc[c], m):
+                        continue
+                    g = ind_of(c) or "?"
+                    if K and cnt.get(g, 0) >= K:
+                        continue
+                    cnt[g] = cnt.get(g, 0) + 1
+                    q.append(c)
+                n_q.append(len(q))
+                zero += not q
+                pw = min(per_w, 1 / len(q)) if q else 0
+                nw = {c: pw for c in q}
+                nw["__0050"] = 1 - pw * len(q)
+                to = sum(abs(nw.get(c, 0) - w.get(c, 0)) for c in set(nw) | set(w)) / 2 if w else 1.0
+                w = nw
+            sat.append(1 - w.get("__0050", 0))
+            r = sum(v * H(c) for c, v in w.items()) - to * COST
+            tot = sum(v * (1 + H(c)) for c, v in w.items())
+            w = {c: v * (1 + H(c)) / tot for c, v in w.items()}
+            eq *= 1 + r
+            em *= 1 + mk["hold"]
+            wins += r > mk["hold"]
+            pk = max(pk, eq)
+            dd = min(dd, eq / pk - 1)
+            k = "train" if t < SPLIT else "test"
+            seg[k][0] *= 1 + r
+            seg[k][1] *= 1 + mk["hold"]
+            seg[k][2] += 1
+            n_m += 1
+        cg = lambda f, y: round((f ** (1 / y) - 1) * 100, 1) if y > 0 else None
+        return {"年化": cg(eq, n_m / 12), "0050 年化": cg(em, n_m / 12),
+                "2018-2023 年化": cg(seg["train"][0], seg["train"][2] / 12), "2018-2023 0050": cg(seg["train"][1], seg["train"][2] / 12),
+                "2023-2026 年化": cg(seg["test"][0], seg["test"][2] / 12), "2023-2026 0050": cg(seg["test"][1], seg["test"][2] / 12),
+                "每月贏 0050 比例": round(wins / max(1, n_m) * 100, 1), "最大回撤": round(dd * 100, 1),
+                "平均符合檔數": round(sum(n_q) / len(n_q), 1) if n_q else None,
+                "沒有符合的次數比例": round(zero / max(1, len(n_q)) * 100, 1),
+                "平均個股占比": round(sum(sat) / len(sat) * 100, 1) if sat else None}
+
+    up = lambda m, k: (m.get("rev_up_n") or 0) >= k
+    hi = lambda m: m.get("rev_hi") is not None and m["rev_hi"] >= 0
+    CONDS = {
+        "分數 ≥ 80": lambda v, m: v >= 80,
+        "分數 ≥ 85": lambda v, m: v >= 85,
+        "分數 ≥ 90": lambda v, m: v >= 90,
+        "分數 ≥ 95": lambda v, m: v >= 95,
+        "連續上修 ≥ 3 個月": lambda v, m: up(m, 3),
+        "連續上修 ≥ 3 個月＋營收創新高": lambda v, m: up(m, 3) and hi(m),
+        "連續上修 ≥ 6 個月＋營收創新高": lambda v, m: up(m, 6) and hi(m),
+        "分數 ≥ 85＋連續上修 ≥ 3 個月": lambda v, m: v >= 85 and up(m, 3),
+        "分數 ≥ 90＋連續上修 ≥ 3 個月＋創新高": lambda v, m: v >= 90 and up(m, 3) and hi(m),
+    }
+    out["threshold"] = {}
+    for E in (1, 3):
+        for name, cond in CONDS.items():
+            for per_w, lab in ((0.05, "每檔 5%，其餘 0050"), (1.0, "全部平均買，沒有才買 0050")):
+                key = f"{name}｜{lab}｜每 {E} 個月"
+                out["threshold"][key] = res = thr_test(cond, per_w, E, K=2)
+                u.log(f"門檻 {key}: " + json.dumps(res, ensure_ascii=False))
     out["persistence"] = persistence(records, reb, ind_of, e, di)
     u.save("research3.json", out)
 
