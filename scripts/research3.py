@@ -342,6 +342,90 @@ def main():
                 "各年（策略/0050）": {y: f"{(v[0] - 1) * 100:+.0f}% / {(v[1] - 1) * 100:+.0f}%" for y, v in years.items()},
                 "最大回撤": round(dd * 100, 1), "平均每月換手": round(sum(x[3] for x in rows[1:]) / max(1, len(rows) - 1) * 100, 1)}
             u.log(f"{vname} 前{N}: " + json.dumps(out["portfolios"][f"{vname}｜前 {N} 名"], ensure_ascii=False)[:400])
+    # ---- 賣出／停利規則：持有到規則觸發才賣，空出的位置補當月基本面最高分、還沒持有的股票
+    def exit_test(N, rule):
+        slots = []          # 每檔：{"c", "v" 市值占比, "g" 進場後累積報酬倍數, "pk" 最高倍數, "mo" 持有月數}
+        eq = em = pk_eq = 1.0
+        dd = 0.0
+        seg = {"train": [1.0, 1.0, 0], "test": [1.0, 1.0, 0]}
+        n_m = n_sell = 0
+        hold_mo = []
+        wins = 0
+        for idx in reb:
+            t, snap = records[idx]
+            mk = snap.get("__mkt")
+            if not mk:
+                continue
+            sc = user_score(snap, FUND, None, None)
+            ranked = [c for c in sorted(sc, key=lambda c: -sc[c]) if snap[c].get("hold") is not None]
+            rpos = {c: i for i, c in enumerate(ranked)}
+            keep, cash = [], 0.0 if slots else 1.0
+            for sl in slots:
+                m = snap.get(sl["c"])
+                if not m or m.get("hold") is None or rule(sl, m, rpos.get(sl["c"], 9999)):
+                    cash += sl["v"]
+                    n_sell += 1
+                    hold_mo.append(sl["mo"])
+                    continue
+                keep.append(sl)
+            held = {x["c"] for x in keep}
+            new = [c for c in ranked if c not in held][:N - len(keep)]
+            for c in new:
+                keep.append({"c": c, "v": cash / len(new), "g": 1.0, "pk": 1.0, "mo": 0})
+            if not new and cash and keep:          # 沒有可補的就平均加回現有持股
+                for x in keep:
+                    x["v"] += cash / len(keep)
+            tot = sum(x["v"] for x in keep) or 1.0
+            buy = sum(x["v"] for x in keep if x["mo"] == 0) / tot if slots else 0.0
+            r = sum(x["v"] * snap[x["c"]]["hold"] for x in keep) / tot - buy * COST
+            for x in keep:
+                h = snap[x["c"]]["hold"]
+                x["v"] = x["v"] / tot * (1 + h)
+                x["g"] *= 1 + h
+                x["pk"] = max(x["pk"], x["g"])
+                x["mo"] += 1
+            slots = keep
+            eq *= 1 + r
+            em *= 1 + mk["hold"]
+            wins += r > mk["hold"]
+            pk_eq = max(pk_eq, eq)
+            dd = min(dd, eq / pk_eq - 1)
+            k = "train" if t < SPLIT else "test"
+            seg[k][0] *= 1 + r
+            seg[k][1] *= 1 + mk["hold"]
+            seg[k][2] += 1
+            n_m += 1
+        cg = lambda f, y: round((f ** (1 / y) - 1) * 100, 1) if y > 0 else None
+        return {"年化": cg(eq, n_m / 12), "0050 年化": cg(em, n_m / 12),
+                "2018-2023 年化": cg(seg["train"][0], seg["train"][2] / 12), "2018-2023 0050": cg(seg["train"][1], seg["train"][2] / 12),
+                "2023-2026 年化": cg(seg["test"][0], seg["test"][2] / 12), "2023-2026 0050": cg(seg["test"][1], seg["test"][2] / 12),
+                "每月贏 0050 比例": round(wins / max(1, n_m) * 100, 1), "最大回撤": round(dd * 100, 1),
+                "平均持有月數": round(sum(hold_mo) / len(hold_mo), 1) if hold_mo else None,
+                "每月賣出檔數": round(n_sell / max(1, n_m), 2)}
+
+    down = lambda m: m.get("rev_up_n") == 0
+    pe_hi = lambda m: m.get("val_cheap") is not None and -m["val_cheap"] > 93     # 本益比位階 > +1.5σ（約 93 百分位）
+    EXITS = {
+        "每月全換（掉出前 N 名就賣，基準）": lambda sl, m, rk: rk >= N_,
+        "掉出前 30 名才賣": lambda sl, m, rk: rk >= 30,
+        "營收預估下修才賣": lambda sl, m, rk: down(m),
+        "下修才賣，或過熱停利": lambda sl, m, rk: down(m) or u.is_over(m),
+        "下修才賣，或本益比 > +1.5σ 停利": lambda sl, m, rk: down(m) or pe_hi(m),
+        "下修才賣，或賺 30% 停利": lambda sl, m, rk: down(m) or sl["g"] >= 1.3,
+        "下修才賣，或賺 50% 停利": lambda sl, m, rk: down(m) or sl["g"] >= 1.5,
+        "下修才賣，或從高點回落 20% 停損": lambda sl, m, rk: down(m) or sl["g"] / sl["pk"] <= 0.8,
+        "掉出前 30 名，或過熱停利": lambda sl, m, rk: rk >= 30 or u.is_over(m),
+        "掉出前 30 名，或賺 50% 停利": lambda sl, m, rk: rk >= 30 or sl["g"] >= 1.5,
+        "只在過熱時停利（其餘不賣）": lambda sl, m, rk: u.is_over(m),
+        "只在本益比 > +1.5σ 時停利": lambda sl, m, rk: pe_hi(m),
+        "固定持有 12 個月": lambda sl, m, rk: sl["mo"] >= 12,
+        "固定持有 12 個月，或過熱停利": lambda sl, m, rk: sl["mo"] >= 12 or u.is_over(m),
+    }
+    out["exit_rules"] = {}
+    for N_ in (5, 10):
+        for name, rule in EXITS.items():
+            out["exit_rules"][f"前 {N_} 名｜{name}"] = res = exit_test(N_, rule)
+            u.log(f"賣出規則 前{N_} {name}: " + json.dumps(res, ensure_ascii=False))
     out["persistence"] = persistence(records, reb, ind_of, e, di)
     u.save("research3.json", out)
 
