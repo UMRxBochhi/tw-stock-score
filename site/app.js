@@ -37,6 +37,7 @@ const F = {
   d5: { t: "5 日分數變化", short: "5日Δ", g: (s) => s.s.d5, kind: "signed1", suf: "", grp: "分數" },
   cap: { t: "市值（億）", short: "市值(億)", g: (s) => s.m.cap != null ? s.m.cap / 1e8 : null, kind: "num0", grp: "價格" },
   qd4: { t: "外資持股 4 週變化（百分點）", short: "外資Δ", g: (s) => s.m.qd4, kind: "signed", suf: "", grp: "籌碼" },
+  cagr3: { t: "近 3 年營收年複合成長（%）", short: "3年成長", g: (s) => s.m.cagr3, kind: "signed", suf: "%", grp: "營收" },
   rev_up_n: { t: "營收預估連續上修月數", short: "連續上修", g: (s) => s.m.rev_up_n, kind: "num0", grp: "營收" },
   rev_rev3: { t: "營收預估近 3 個月上修 %", short: "3月上修", g: (s) => s.m.rev_rev3, kind: "signed1", grp: "營收" },
   pe_z: { t: "本益比位階 σ（< −0.5 便宜、> +0.5 偏貴）", short: "位階σ", g: (s) => s.m.pe_z, kind: "signed", suf: "", grp: "價值" },
@@ -90,7 +91,7 @@ function cell(key, s) {
 }
 
 const TABCOLS = {
-  step2: ["p", "chg", "score", "rev_up_n", "rev_rev3", "rev_hi", "pe_z", "b20", "cap"],
+  step2: ["p", "chg", "score", "rev_up_n", "qf", "cagr3", "rev_rev3", "pe_z", "cap"],
   watch: ["p", "chg", "score", "rev_up_n", "rev_rev3", "pe_z", "b20", "b60", "qd4"],
   screen: ["p", "chg", "score", "f", "t", "c", "rev_up_n", "rev_rev3", "rev_hi", "pe_z", "opm", "qf", "cap"],
 };
@@ -247,7 +248,7 @@ function renderStep2Info() {
   $("#ruleInfo").innerHTML = `<div class="rulebox">
     <b>② 本季名單</b>　<span class="note">${q.key || ""} 起（${q.start ? md(q.start) : ""} 收盤價），下次換股 ${q.next || "—"} 之後</span>
     <ol class="sop">
-      <li><b>條件</b>：市值 ≥ 100 億、營收預估連續上修 ≥ 3 個月、月營收創 12 個月新高；依基本面分數排序，每個產業最多 2 檔，最多 20 檔。</li>
+      <li><b>條件</b>：市值 ≥ 100 億、營收預估上修中、外資持股 ≥ 20%、近 3 年營收年成長 ≥ 10%（長期成長＋法人認可）；依基本面分數排序，每個產業最多 2 檔，最多 20 檔。</li>
       <li><b>比例</b>：<span class="chip ${lvCls[q.level_now] || "neutral"}">現在：${esc(q.level_now || "—")}</span>
         建議個股合計 <b>${q.stock_w ?? "—"}%</b>（每檔約 ${q.per_w ?? "—"}%），其餘放 0050。
         ${(q.fav || []).map((t) => `<span class="chip good">${esc(t)}</span>`).join(" ")} ${(q.unfav || []).map((t) => `<span class="chip warn">${esc(t)}</span>`).join(" ")}</li>
@@ -259,7 +260,8 @@ function renderStep2Info() {
     ${hist.length ? `<table class="kv"><tr><td>期間</td><td>檔數</td><td>名單</td><td>0050</td></tr>${hist.map((h) =>
       `<tr><td>${md(h.start)}~${md(h.end)}</td><td>${h.n}</td><td>${pct(h.ret)}</td><td>${pct(h.ret0050)}</td></tr>`).join("")}</table>` : ""}
     ${crashHtml()}
-    <p class="note">回測（2018~2026，已扣交易成本）：這套條件每季換一次，年化約 28%，0050 約 22%，每月贏 0050 的比例約 6 成；仍有約 4 成月份會輸。
+    <p class="note">回測（2018~2026，已扣交易成本）：這套條件每季換一次，三種換股月份年化 26.9~28.6%，0050 22.1%；2018~23、2023~26 兩段都贏，最大回撤約 −28%。
+      但每個月贏 0050 的比例只有約 45%（贏的時候贏比較多），要整季、整組看，不要看單月單檔。
       有利／不利的判斷樣本少，可能是巧合，從這一季開始實際記錄驗證。不是投資建議。</p></div>`;
 }
 
@@ -281,33 +283,31 @@ function crashHtml() {
 // ---------- 第三步：持股監控
 function holdAdvice(s) {
   const m = s.m, out = [];
-  let act = "續抱", cls = "neutral";
+  const q = state.data.step2 || {}, k = state.data.crash || {};
+  let act = "照自己的計畫", cls = "neutral";
+  if ((k.codes || []).includes(s.c)) { act = k.active ? "大跌名單：分批買、持有 12 個月" : "在大跌名單（未啟用）"; cls = k.active ? "good" : "neutral"; }
+  if ((q.codes || []).includes(s.c)) {
+    if ((q.live || []).includes(s.c)) { act = `本季名單：續抱到 ${q.next || "下次換股"}`; cls = "good"; }
+    else { act = `已不符合：${q.next || "下次換股"} 換掉（期間內不用賣）`; cls = "warn"; }
+  } else if ((q.live || []).includes(s.c)) { act = "符合條件，下次換股可能入選"; cls = "good"; }
   if (m.rev_up_n === 0) out.push(["warn", "營收預估本月下修"]);
-  if (m.accel != null && m.accel <= -10) out.push(["warn", `營收動能轉弱（${m.accel.toFixed(0)}）`]);
-  if (m.over) out.push(["warn", "過熱（乖離過大）"]);
-  if (m.pe_z != null && m.pe_z > 1.5) out.push(["warn", `本益比極貴（+${m.pe_z}σ）`]);
-  if (m.sup_broke) out.push(["warn", `跌破前波低點 ${m.sup_last}`]);
-  if (m.news_dn) out.push(["warn", `法人下調 ${m.news_dn} 則`]);
   if (m.rev_up_n >= 1) out.push(["good", `營收預估上修中（${m.rev_up_n} 個月）`]);
-  if (m.pe_zone === "cheap") out.push(["good", `本益比便宜（${m.pe_z}σ）`]);
+  if (m.qf != null) out.push([m.qf >= 20 ? "good" : "neutral", `外資持股 ${m.qf}%`]);
+  if (m.cagr3 != null) out.push([m.cagr3 >= 10 ? "good" : "neutral", `3 年營收年成長 ${m.cagr3}%`]);
   if (m.news_up) out.push(["good", `法人上調 ${m.news_up} 則`]);
-  const weak = (m.rev_up_n === 0 ? 1 : 0) + (m.accel != null && m.accel <= -10 ? 1 : 0);
-  if (weak >= 2) { act = "檢討出場：上修中斷且動能轉弱"; cls = "warn"; }
-  else if (m.over || (m.pe_z != null && m.pe_z > 1.5)) { act = "考慮停利一部分"; cls = "warn"; }
-  else if (m.rev_up_n >= 1 && m.pe_zone === "cheap") { act = "可加碼（上修中＋便宜）"; cls = "good"; }
-  else if (m.rev_up_n === 0) { act = "觀察：預估下修一個月"; cls = "warn"; }
+  if (m.news_dn) out.push(["warn", `法人下調 ${m.news_dn} 則`]);
   return { act, cls, out };
 }
 function renderStep3() {
   const list = state.data.stocks.filter((s) => state.watch.has(s.c));
-  if (!list.length) { $("#watchInfo").innerHTML = '<div class="rulebox"><b>③ 持股監控</b><p class="note">還沒有持股。在第二步或任何清單點 ☆ 加入，這裡會每天檢查：上修是否持續、是否過熱該停利、是否便宜可加碼。</p></div>'; return; }
-  $("#watchInfo").innerHTML = `<div class="rulebox"><b>③ 持股監控</b>　<span class="note">每天收盤後更新；建議持有 3~5 年，這裡只在基本面或價格出現明顯變化時提醒</span>
+  if (!list.length) { $("#watchInfo").innerHTML = '<div class="rulebox"><b>③ 持股監控</b><p class="note">還沒有持股。在任何清單點 ☆ 加入，這裡會每天檢查它還在不在本季名單、大跌名單。</p></div>'; return; }
+  $("#watchInfo").innerHTML = `<div class="rulebox"><b>③ 持股監控</b>　<span class="note">每天收盤後更新；本季名單持有到換股日、大跌名單持有 12 個月</span>
     <table class="kv" style="margin-top:8px"><tr><td>股票</td><td>建議</td><td>訊號</td></tr>
     ${list.map((s) => { const a = holdAdvice(s); return `<tr><td><a href="#${s.c}" data-open="${s.c}">${s.c} ${esc(s.n)}</a></td>
       <td><span class="chip ${a.cls}">${a.act}</span></td><td>${a.out.map(([c, t]) => `<span class="chip ${c}">${t}</span>`).join(" ") || NA}</td></tr>`; }).join("")}
     </table>
-    <p class="note"><b>出場</b>：營收預估下修且動能轉弱（當初買的理由消失）。<b>停利一部分</b>：乖離過大或本益比 &gt; +1.5σ。<b>加碼</b>：仍在上修且本益比 &lt; −0.5σ。
-      這些規則還沒經過回測驗證（研究中），先當提醒。</p></div>`;
+    <p class="note"><b>為什麼不設停利、停損</b>：回測過過熱停利、賺 30%／50% 停利、從高點回落 20% 停損、本益比 &gt; +1.5σ 賣出，全部比「到換股日再換」差，
+      因為會提早賣掉大漲的股票。所以只在換股日依條件換股。</p></div>`;
 }
 
 let etfState = { kind: "", sort: "avgval", asc: false };
@@ -436,8 +436,9 @@ function renderHow() {
     <h3>這個網站的用法：三步驟</h3>
     <p><b>① 趨勢族群</b>：先看族群分數，只往下看前段族群。族群分數 = 族群內公司的近 3 月營收年增中位數 30%、營收創 12 個月新高的比例 25%、營收動能 20%、營收預估連續上修 ≥ 2 個月的比例 25%（族群之間排名）。
        「產業族群」用證交所產業分類；AI 等趨勢用人工整理的產業鏈環節（data/themes.json，可自行修改）。</p>
-    <p><b>② 本季名單</b>：市值 ≥ 100 億、營收預估連續上修 ≥ 3 個月、營收創 12 月新高，每產業最多 2 檔、最多 20 檔；每季換一次，其餘資金放 0050。族群分數只當趨勢參考，不用來篩選（回測篩族群會錯過台積電等大型股）。</p>
-    <p><b>③ 持股監控</b>：☆ 加入的股票每天檢查上修是否持續、是否過熱、是否便宜可加碼，持有 3~5 年。</p>
+    <p><b>② 本季名單</b>：市值 ≥ 100 億、營收預估上修中、外資持股 ≥ 20%、近 3 年營收年成長 ≥ 10%，每產業最多 2 檔、最多 20 檔；每季換一次，其餘資金放 0050。族群分數只當趨勢參考，不用來篩選（回測篩族群會錯過台積電等大型股）。</p>
+    <p><b>大跌加碼名單</b>：0050 距一年高點跌超過 15% 時啟用。候選是營收上修中、前瞻本益比 &lt; −0.5σ 的大型股，依外資持股 40%＋3 年營收成長 40%＋市值 20% 排序取前 10，分批買、持有 12 個月。</p>
+    <p><b>③ 持股監控</b>：☆ 加入的股票每天檢查還在不在名單；不設停利、停損（回測都比較差）。</p>
     <h3>分數</h3>
     <table><tr><th>面向</th><th>權重</th><th>內容</th></tr>
       <tr><td>基本面</td><td>100%</td><td>營收預估連續上修月數 30%、近 3 月上修幅度 20%、營收距 12 月新高 20%、營收動能 15%、營收連續年增 15%</td></tr>
@@ -447,8 +448,17 @@ function renderHow() {
       研究 3 用 2018~2026 資料測過：營收預估上修有效；技術面、籌碼面加進分數反而變差；停利、過熱出場也比較差。</p>
     <h3>營收預估上修</h3>
     <p>每月新營收公布後，用「近 12 個月營收 ×（1 + 近 3 個月年增率）」推估未來 12 個月營收；比上個月的推估高就是上修。從營收出發，不受業外一次性收益影響；但這是外推，不是法人預估，會比法人慢 1~2 個月。</p>
-    <h3>本益比位階（買點）</h3>
-    <p>取自己 5 年的月本益比（取對數）算平均與標準差：&lt; −0.5σ 便宜、−0.5σ ~ +0.5σ 合理、&gt; +0.5σ 偏貴。用近四季 EPS 的本益比和歷史比較才公平；預估本益比在個股頁列為參考。</p>
+    <h3>本益比位階</h3>
+    <p>取自己 5 年的月本益比（取對數）算平均與標準差：&lt; −0.5σ 便宜、−0.5σ ~ +0.5σ 合理、&gt; +0.5σ 偏貴。
+      前瞻版＝近四季 EPS ×（1 + 營收預估成長），和自己過去每個月當時的前瞻本益比比較。</p>
+    <p class="note">回測：平常時期位階便宜<b>不是</b>好買點（持有 3~6 個月反而較差，營收持續上修的公司常常偏貴還繼續漲）；只有大跌之後，便宜＋上修＋法人持股高＋長期成長的組合才明顯贏 0050。</p>
+    <h3>研究結論（2018~2026）</h3>
+    <ul>
+      <li>有效：營收預估上修、營收創新高、外資持股比例高、近 3 年營收長期成長、分散 10~20 檔、每季換股。</li>
+      <li>無效或更差：技術面（站上季線、支撐、乖離）、籌碼變化（外資 4 週變化、法人買賣超）、先篩族群、停利／停損／過熱出場、判斷多空再進場、逢低買、平常時期用本益比位階挑買點。</li>
+      <li>單一個股贏 0050 的機率幾乎都 &lt; 50%；組合能贏是因為少數大贏家把平均拉高，所以要買一組、不要押單檔。</li>
+      <li>仍不保證：大約一半的月份會輸 0050，0050 仍建議當核心。</li>
+    </ul>
     <h3>消息</h3>
     <p class="note">法說會行事曆來自公開資訊觀測站；「法人調升目標價、上修財測」來自 Google 新聞標題自動比對，可能誤判，只當參考、不計分。集保大戶持股每週記錄，累積後才有變化值。</p>
     <h3>使用小技巧</h3>
@@ -519,7 +529,10 @@ async function showDetail(code) {
     <table class="kv steps">
       <tr><td>① 族群</td><td>${grpLine(s)}</td></tr>
       <tr><td>① 營收預估</td><td>${upTag(m)} ${m.rev_rev3 != null ? `近 3 個月 ${signed(m.rev_rev3, 1)}` : ""}${m.rev_hi != null && m.rev_hi >= 0 ? ' <span class="chip good">月營收創 12 月新高</span>' : ""}</td></tr>
-      <tr><td>② 買點</td><td>${zoneTag(m)} ${m.b60 != null ? `<span class="note">距季線 ${signed(m.b60, 1)}${m.b60 > 15 ? "（離季線遠，不追）" : ""}</span>` : ""}</td></tr>
+      <tr><td>② 名單</td><td>${(state.data.step2?.live || []).includes(s.c) ? '<span class="chip good">符合本季名單條件</span>' : '<span class="chip neutral">不符合本季名單條件</span>'}
+        ${(state.data.crash?.codes || []).includes(s.c) ? ` <span class="chip ${state.data.crash.active ? "good" : "neutral"}">大跌名單${state.data.crash.active ? "（已啟用）" : ""}</span>` : ""}
+        <span class="note">外資持股 ${m.qf ?? "—"}%・3 年營收年成長 ${m.cagr3 ?? "—"}%</span></td></tr>
+      <tr><td>位階</td><td>${zoneTag(m)} ${m.fpe_zf != null ? `<span class="note">前瞻 ${m.fpe_zf}σ</span>` : ""} <span class="note">（參考；平常時期不是好買點訊號）</span></td></tr>
       <tr><td>③ 監控</td><td>${(() => { const a = holdAdvice(s); return `<span class="chip ${a.cls}">${a.act}</span>`; })()}</td></tr>
     </table>
     <div class="chips">${chips}</div>

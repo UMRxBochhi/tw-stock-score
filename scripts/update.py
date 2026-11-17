@@ -1562,7 +1562,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
         "themes": (th_ := theme_stats(themes or {}, stocks, qf_latest)),
         "groups": (gr_ := theme_stats({"產業": {g: [x["c"] for x in stocks if x["ind"] == g and x["s"].get("score") is not None]
                                                 for g in {x["ind"] for x in stocks if x["ind"]}}}, stocks, qf_latest).get("產業", [])),
-        "step2": quarter_plan(stocks, prices, last),
+        "step2": quarter_plan(stocks, prices, last, fund),
         "crash": crash_plan(stocks, prices, last, pe_monthly, fund),
         "picks": {rid: top_picks([(x["c"], x["m"]) for x in stocks], rid) for rid in RULES},
     }
@@ -1587,14 +1587,38 @@ def sync_hist(prices, t86):
 
 
 # ---------------------------------------------------------------- 第二步：本季名單（研究 3 驗證的做法）
-# 條件：市值 ≥ 100 億、營收預估連續上修 ≥ 3 個月、月營收創 12 個月新高；依基本面分數排序，每產業最多 2 檔、最多 20 檔
+# 條件（Q_RULE 2）：市值 ≥ 100 億、營收預估上修中、外資持股 ≥ 20%、近 3 年營收年複合成長 ≥ 10%；依基本面分數排序，每產業最多 2 檔、最多 20 檔
+# 研究 3：三種換股起始月年化 26.9~28.6%（0050 22.1%），2018~23、2023~26 都贏；舊條件（上修 ≥ 3＋創新高）有一種起始月輸
 # 每季（3、6、9、12 月 11 日後）換一次；每檔 5%，其餘放 0050；名單與當時價格記在 data/quarter.json，之後可對帳
 Q_MONTHS = (3, 6, 9, 12)
 Q_MAX, Q_PER_IND, Q_PER_W = 20, 2, 0.05
+Q_RULE, Q_QF, Q_CAGR = 2, 20.0, 10.0
 
 
-def quarter_plan(stocks, prices, last):
+def add_cagr3(stocks, fund):
+    """近 3 年營收年複合成長（%）＝近 12 個月營收 vs 36 個月前的近 12 個月營收"""
+    revh = {}
+    p = DATA / "hist" / "rev.json"
+    if p.exists():
+        revh = json.loads(p.read_text(encoding="utf-8"))
+    for c, h in fund.get("rev_hist", {}).items():
+        revh.setdefault(c, {}).update(h)
+    for x in stocks:
+        h = revh.get(x["c"])
+        if not h:
+            continue
+        rk = max(h)
+        cur = [h.get(_shift(rk, i), [None])[0] for i in range(12)]
+        old = [h.get(_shift(rk, i + 36), [None])[0] for i in range(12)]
+        if None not in cur + old and sum(old) > 0 and sum(cur) > 0:
+            x["m"]["cagr3"] = round(((sum(cur) / sum(old)) ** (1 / 3) - 1) * 100, 1)
+
+
+def quarter_plan(stocks, prices, last, fund):
+    add_cagr3(stocks, fund)
     st = load("quarter.json", {"cur": None, "hist": []})
+    if st["cur"] and st["cur"].get("rule") != Q_RULE:      # 規則改版：本期名單重選（已結束的期間保留）
+        st["cur"] = None
     pdates = sorted(prices)
 
     def px(d, c):
@@ -1609,7 +1633,8 @@ def quarter_plan(stocks, prices, last):
 
     m60 = ret(px(pdates[-61], "0050"), px(last, "0050")) if len(pdates) > 60 else None
     cand = [x for x in stocks if x["s"].get("score") is not None and (x["m"].get("cap") or 0) >= MIN_CAP
-            and (x["m"].get("rev_up_n") or 0) >= 3 and x["m"].get("rev_hi") is not None and x["m"]["rev_hi"] >= 0]
+            and (x["m"].get("rev_up_n") or 0) >= 1 and (x["m"].get("qf") or 0) >= Q_QF
+            and x["m"].get("cagr3") is not None and x["m"]["cagr3"] >= Q_CAGR]
     cand.sort(key=lambda x: -x["s"]["score"])
     pick, cnt = [], {}
     for x in cand:
@@ -1644,7 +1669,7 @@ def quarter_plan(stocks, prices, last):
             prev["end_px"] = {c: px(last, c) for c in prev["codes"]}
             prev["end_0050"] = px(last, "0050")
             st["hist"].append(prev)
-        st["cur"] = {"key": key, "start": last, "codes": pick, "px": {c: px(last, c) for c in pick},
+        st["cur"] = {"key": key, "rule": Q_RULE, "start": last, "codes": pick, "px": {c: px(last, c) for c in pick},
                      "p0050": px(last, "0050"), "level": level, "share": share,
                      "added": [c for c in pick if not prev or c not in prev["codes"]],
                      "removed": [c for c in prev["codes"] if c not in pick] if prev else []}
@@ -1738,6 +1763,8 @@ def crash_plan(stocks, prices, last, pe_monthly, fund):
         if None in cur12 + old12 or sum(old12) <= 0:
             continue
         cagr3 = (sum(cur12) / sum(old12)) ** (1 / 3) - 1
+        if cagr3 <= -1:
+            continue
         fn = factor(h, rk)
         if not fn or fn <= 0:
             continue
