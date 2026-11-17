@@ -532,7 +532,7 @@ _TWSE_CODES: list = []     # 上市代號（main 從最新收盤行情填入）
 # 基本面 65%：營收預估修正、成長性（獲利能力等季報歷史補齊後加入）
 # 技術面 20%：趨勢（站上季線但沒追高）、接近支撐（分批買、不追價）
 # 籌碼面 15%：外資持股 4 週變化、集保大戶持股 4 週變化、負乖離（不追高）
-STEP_W = {"f": 0.65, "t": 0.20, "c": 0.15}
+STEP_W = {"f": 1.0, "t": 0.0, "c": 0.0}     # 研究 3：技術面、籌碼面加進分數會變差，改為只顯示不計分
 STEP_F = {"rev_up_n": .30, "rev_rev3": .20, "rev_hi": .20, "accel": .15, "streak": .15}
 STEP_C = {"qd4": .40, "big400_chg": .30, "-b20": .30}
 MIN_CAP = 1e10            # 第二步候選：市值至少 100 億
@@ -1562,7 +1562,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
         "themes": (th_ := theme_stats(themes or {}, stocks, qf_latest)),
         "groups": (gr_ := theme_stats({"產業": {g: [x["c"] for x in stocks if x["ind"] == g and x["s"].get("score") is not None]
                                                 for g in {x["ind"] for x in stocks if x["ind"]}}}, stocks, qf_latest).get("產業", [])),
-        "step2": step2_list(stocks, [g for g in gr_ if g["n"] >= 5], th_.get("AI", [])),
+        "step2": quarter_plan(stocks, prices, last),
         "picks": {rid: top_picks([(x["c"], x["m"]) for x in stocks], rid) for rid in RULES},
     }
 
@@ -1583,6 +1583,94 @@ def sync_hist(prices, t86):
             if new:
                 cur.update(new)
                 hist_write(prefix, ym, cur)
+
+
+# ---------------------------------------------------------------- 第二步：本季名單（研究 3 驗證的做法）
+# 條件：市值 ≥ 100 億、營收預估連續上修 ≥ 3 個月、月營收創 12 個月新高；依基本面分數排序，每產業最多 2 檔、最多 20 檔
+# 每季（3、6、9、12 月 11 日後）換一次；每檔 5%，其餘放 0050；名單與當時價格記在 data/quarter.json，之後可對帳
+Q_MONTHS = (3, 6, 9, 12)
+Q_MAX, Q_PER_IND, Q_PER_W = 20, 2, 0.05
+
+
+def quarter_plan(stocks, prices, last):
+    st = load("quarter.json", {"cur": None, "hist": []})
+    pdates = sorted(prices)
+
+    def px(d, c):
+        v = (prices.get(d) or {}).get(c)
+        return v[0] if v and v[0] else None
+
+    def ret(a, b):
+        if not a or not b:
+            return None
+        r = b / a - 1
+        return None if r < -0.6 else r            # 分割（如 0050 1 拆 4）造成的假跌幅不算
+
+    m60 = ret(px(pdates[-61], "0050"), px(last, "0050")) if len(pdates) > 60 else None
+    cand = [x for x in stocks if x["s"].get("score") is not None and (x["m"].get("cap") or 0) >= MIN_CAP
+            and (x["m"].get("rev_up_n") or 0) >= 3 and x["m"].get("rev_hi") is not None and x["m"]["rev_hi"] >= 0]
+    cand.sort(key=lambda x: -x["s"]["score"])
+    pick, cnt = [], {}
+    for x in cand:
+        g = x["ind"] or "?"
+        if cnt.get(g, 0) >= Q_PER_IND:
+            continue
+        cnt[g] = cnt.get(g, 0) + 1
+        pick.append(x["c"])
+        if len(pick) >= Q_MAX:
+            break
+
+    d = datetime.strptime(last, "%Y%m%d")
+    mo = d.month
+    fav, unfav = [], []
+    if m60 is not None and m60 > 0.10:
+        fav.append(f"0050 近 3 個月漲 {m60 * 100:.0f}%（> 10%）")
+    if m60 is not None and 0 <= m60 <= 0.10:
+        unfav.append(f"0050 近 3 個月只小漲 {m60 * 100:.0f}%（0~10%）")
+    if mo in (12, 1, 2, 3):
+        fav.append("12～3 月（歷史上較有利）")
+    if mo in (5, 6, 7, 8, 9):
+        unfav.append("5～9 月（歷史上較不利）")
+    level = "有利" if fav and not unfav else "不利" if unfav and not fav else "普通"
+    share = {"有利": 0.8, "普通": 0.5, "不利": 0.25}[level]
+
+    key = f"{d.year}-{mo:02d}"
+    due = mo in Q_MONTHS and d.day >= 11 and (not st["cur"] or st["cur"]["key"] != key)
+    if not st["cur"] or due:
+        prev = st["cur"]
+        if prev:
+            prev["end"] = last
+            prev["end_px"] = {c: px(last, c) for c in prev["codes"]}
+            prev["end_0050"] = px(last, "0050")
+            st["hist"].append(prev)
+        st["cur"] = {"key": key, "start": last, "codes": pick, "px": {c: px(last, c) for c in pick},
+                     "p0050": px(last, "0050"), "level": level, "share": share,
+                     "added": [c for c in pick if not prev or c not in prev["codes"]],
+                     "removed": [c for c in prev["codes"] if c not in pick] if prev else []}
+        save("quarter.json", st)
+
+    def perf(q, end_px, end50):
+        rs = [ret(q["px"].get(c), end_px.get(c)) for c in q["codes"]]
+        rs = [r for r in rs if r is not None]
+        r50 = ret(q["p0050"], end50)
+        return (round(sum(rs) / len(rs) * 100, 1) if rs else None), (round(r50 * 100, 1) if r50 is not None else None)
+
+    cur = st["cur"]
+    r_basket, r_50 = perf(cur, {c: px(last, c) for c in cur["codes"]}, px(last, "0050"))
+    ny, nm = d.year, next((m for m in Q_MONTHS if m > mo or (m == mo and d.day < 11)), None)
+    if nm is None:
+        ny, nm = ny + 1, Q_MONTHS[0]
+    n = len(cur["codes"])
+    stock_w = min(share, Q_PER_W * n)
+    return {"codes": cur["codes"], "key": cur["key"], "start": cur["start"], "next": f"{ny}/{nm}/11",
+            "added": cur.get("added", []), "removed": cur.get("removed", []),
+            "level": cur.get("level"), "level_now": level, "fav": fav, "unfav": unfav,
+            "m60": round(m60 * 100, 1) if m60 is not None else None,
+            "stock_w": round(stock_w * 100), "per_w": round(stock_w / n * 100, 1) if n else 0,
+            "ret": r_basket, "ret0050": r_50, "live": pick,
+            "hist": [dict(zip(("key", "start", "end", "ret", "ret0050", "n"),
+                              (h["key"], h["start"], h["end"], *perf(h, h["end_px"], h["end_0050"]), len(h["codes"]))))
+                     for h in st["hist"]]}
 
 
 # ---------------------------------------------------------------- main

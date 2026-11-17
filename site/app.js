@@ -30,10 +30,10 @@ const rocYm = (k) => `${+k.slice(0, -2) + 1911}/${k.slice(-2)}`;
 
 // ---------- 欄位定義（表格、篩選共用）
 const F = {
-  score: { t: "三步驟分數（基本面 65、技術面 20、籌碼面 15）", short: "分數", g: (s) => s.s.score, kind: "total", grp: "分數" },
+  score: { t: "基本面分數（營收預估上修、創新高、動能；技術面與籌碼面不計分）", short: "分數", g: (s) => s.s.score, kind: "total", grp: "分數" },
   f: { t: "基本面分數（營收預估上修、成長）", short: "基本面", g: (s) => s.s.f, kind: "bar", grp: "分數" },
-  t: { t: "技術面分數（趨勢、支撐，不追高）", short: "技術面", g: (s) => s.s.t, kind: "bar", grp: "分數" },
-  c: { t: "籌碼面分數（外資、大戶持股變化，負乖離）", short: "籌碼面", g: (s) => s.s.c, kind: "bar", grp: "分數" },
+  t: { t: "技術面（參考，不計分）", short: "技術*", g: (s) => s.s.t, kind: "bar", grp: "分數" },
+  c: { t: "籌碼面（參考，不計分）", short: "籌碼*", g: (s) => s.s.c, kind: "bar", grp: "分數" },
   d5: { t: "5 日分數變化", short: "5日Δ", g: (s) => s.s.d5, kind: "signed1", suf: "", grp: "分數" },
   cap: { t: "市值（億）", short: "市值(億)", g: (s) => s.m.cap != null ? s.m.cap / 1e8 : null, kind: "num0", grp: "價格" },
   qd4: { t: "外資持股 4 週變化（百分點）", short: "外資Δ", g: (s) => s.m.qd4, kind: "signed", suf: "", grp: "籌碼" },
@@ -90,7 +90,7 @@ function cell(key, s) {
 }
 
 const TABCOLS = {
-  step2: ["p", "chg", "score", "f", "t", "c", "rev_up_n", "rev_rev3", "pe_z", "b60", "cap"],
+  step2: ["p", "chg", "score", "rev_up_n", "rev_rev3", "rev_hi", "pe_z", "b20", "cap"],
   watch: ["p", "chg", "score", "rev_up_n", "rev_rev3", "pe_z", "b20", "b60", "qd4"],
   screen: ["p", "chg", "score", "f", "t", "c", "rev_up_n", "rev_rev3", "rev_hi", "pe_z", "opm", "qf", "cap"],
 };
@@ -174,7 +174,12 @@ function renderTable() {
 
 function flagHtml(s) {
   const m = s.m;
-  if (state.tab === "step2" && m.grp) return ` <span class="flag" title="來自前段族群">${esc(m.grp)}</span>`;
+  if (state.tab === "step2") {
+    const q = state.data.step2 || {};
+    if ((q.added || []).includes(s.c) && (q.hist || []).length) return ' <span class="flag good" title="本季新進">新進</span>';
+    if (!(q.live || []).includes(s.c)) return ' <span class="flag warn" title="現在已不符合條件，下次換股會剔除（期間內不用賣）">已不符合</span>';
+    return s.ind ? ` <span class="flag">${esc(s.ind)}</span>` : "";
+  }
   if (m.over) return ' <span class="flag warn" title="20 日乖離 > 20% 或季線乖離 > 50%，分數已扣 15">過熱</span>';
   if (m.rev_up_n === 0) return ' <span class="flag warn" title="營收預估本月下修">預估下修</span>';
   if (m.rev_up_n >= 3) return ` <span class="flag good" title="營收預估連續上修">上修 ${m.rev_up_n} 月</span>`;
@@ -223,24 +228,35 @@ function renderMarket() {
   const g = (state.data.groups || []).filter((x) => x.n >= 5).slice(0, 3);
   if (g.length) cards.push(`<div class="card"><div class="lbl">① 最強族群</div>${g.map((x) =>
     `<div class="mini"><a href="#" data-gotab="trend">${esc(x.seg)}</a><b>${x.seg_score?.toFixed(0) ?? "—"}</b></div>`).join("")}</div>`);
-  const n2 = state.data.step2?.codes?.length || 0;
-  cards.push(`<div class="card"><div class="lbl">② 選股候選</div><div class="val">${n2} 檔</div>
-    <div class="note">前段族群、市值 ≥ 100 億、預估上修中　<a href="#" data-gotab="step2">看候選 →</a></div></div>`);
+  const q = state.data.step2 || {};
+  if (q.codes) cards.push(`<div class="card"><div class="lbl">② 本季名單</div><div class="val">${q.codes.length} 檔・${esc(q.level_now || "")}</div>
+    <div class="note">建議個股 ${q.stock_w}%、其餘 0050；下次換股 ${q.next}　<a href="#" data-gotab="step2">看名單 →</a></div></div>`);
   $("#market").innerHTML = cards.join("");
 }
 
-// ---------- 第二步：選股與買點
+// ---------- 第二步：本季名單
 function renderStep2Info() {
-  const s2 = state.data.step2 || {};
+  const q = state.data.step2 || {};
+  const nm = (c) => { const x = state.data.stocks.find((s) => s.c === c); return `<a href="#${c}" data-open="${c}">${c} ${esc(x?.n || "")}</a>`; };
+  const pct = (v) => v == null ? "—" : `${v > 0 ? "+" : ""}${v}%`;
+  const lvCls = { "有利": "good", "普通": "neutral", "不利": "warn" };
+  const hist = (q.hist || []).slice().reverse();
   $("#ruleInfo").innerHTML = `<div class="rulebox">
-    <b>② 選股與買點</b>　<span class="note">從第一步的前段族群裡挑股票，再看買點</span>
+    <b>② 本季名單</b>　<span class="note">${q.key || ""} 起（${q.start ? md(q.start) : ""} 收盤價），下次換股 ${q.next || "—"} 之後</span>
     <ol class="sop">
-      <li><b>族群</b>：產業族群前 5 名（${(s2.ind || []).map(esc).join("、") || "—"}），加上 AI 環節前 3 名（${(s2.ai || []).map(esc).join("、") || "—"}）。</li>
-      <li><b>個股條件</b>：市值 ≥ 100 億、營收預估本月仍在上修、沒有過熱；依三步驟分數排序（基本面 65%、技術面 20%、籌碼面 15%）。</li>
-      <li><b>買點（本益比位階）</b>：<span class="chip good">便宜 &lt; −0.5σ</span> 可分批買進；<span class="chip neutral">合理 ±0.5σ</span> 小量分批；<span class="chip warn">偏貴 &gt; +0.5σ</span> 等回到合理區。</li>
-      <li><b>技術面</b>：站上季線但距離 ≤ 15% 最理想；離季線太遠就不追，等回檔到支撐附近再分批。</li>
+      <li><b>條件</b>：市值 ≥ 100 億、營收預估連續上修 ≥ 3 個月、月營收創 12 個月新高；依基本面分數排序，每個產業最多 2 檔，最多 20 檔。</li>
+      <li><b>比例</b>：<span class="chip ${lvCls[q.level_now] || "neutral"}">現在：${esc(q.level_now || "—")}</span>
+        建議個股合計 <b>${q.stock_w ?? "—"}%</b>（每檔約 ${q.per_w ?? "—"}%），其餘放 0050。
+        ${(q.fav || []).map((t) => `<span class="chip good">${esc(t)}</span>`).join(" ")} ${(q.unfav || []).map((t) => `<span class="chip warn">${esc(t)}</span>`).join(" ")}</li>
+      <li><b>期間內不用賣</b>：停利、過熱出場在回測裡都比較差；季中變成「已不符合」也等到下次換股再換。</li>
+      <li><b>本益比位階、技術面、籌碼面</b>只當參考：同樣要買時，可優先買位階不貴、沒有漲多的。</li>
     </ol>
-    <p class="note">這套架構正在用 2018 年以來的資料驗證（研究 3），驗證前請當參考；建議以 0050 為主，這裡的股票只用一小部分資金。點 ☆ 加入第三步的持股監控。</p></div>`;
+    <p class="note">本季至今：名單平均 <b>${pct(q.ret)}</b>，0050 <b>${pct(q.ret0050)}</b>（不含股利）。
+      ${q.added?.length && hist.length ? `新進：${q.added.map(nm).join("、")}。` : ""}${q.removed?.length ? `剔除：${q.removed.map(nm).join("、")}。` : ""}</p>
+    ${hist.length ? `<table class="kv"><tr><td>期間</td><td>檔數</td><td>名單</td><td>0050</td></tr>${hist.map((h) =>
+      `<tr><td>${md(h.start)}~${md(h.end)}</td><td>${h.n}</td><td>${pct(h.ret)}</td><td>${pct(h.ret0050)}</td></tr>`).join("")}</table>` : ""}
+    <p class="note">回測（2018~2026，已扣交易成本）：這套條件每季換一次，年化約 28%，0050 約 22%，每月贏 0050 的比例約 6 成；仍有約 4 成月份會輸。
+      有利／不利的判斷樣本少，可能是巧合，從這一季開始實際記錄驗證。不是投資建議。</p></div>`;
 }
 
 // ---------- 第三步：持股監控
@@ -401,14 +417,15 @@ function renderHow() {
     <h3>這個網站的用法：三步驟</h3>
     <p><b>① 趨勢族群</b>：先看族群分數，只往下看前段族群。族群分數 = 族群內公司的近 3 月營收年增中位數 30%、營收創 12 個月新高的比例 25%、營收動能 20%、營收預估連續上修 ≥ 2 個月的比例 25%（族群之間排名）。
        「產業族群」用證交所產業分類；AI 等趨勢用人工整理的產業鏈環節（data/themes.json，可自行修改）。</p>
-    <p><b>② 選股與買點</b>：前段族群裡，市值 ≥ 100 億、營收預估仍在上修、沒過熱的公司，依三步驟分數排序；再用本益比位階決定買點。</p>
+    <p><b>② 本季名單</b>：市值 ≥ 100 億、營收預估連續上修 ≥ 3 個月、營收創 12 月新高，每產業最多 2 檔、最多 20 檔；每季換一次，其餘資金放 0050。族群分數只當趨勢參考，不用來篩選（回測篩族群會錯過台積電等大型股）。</p>
     <p><b>③ 持股監控</b>：☆ 加入的股票每天檢查上修是否持續、是否過熱、是否便宜可加碼，持有 3~5 年。</p>
-    <h3>三步驟分數</h3>
+    <h3>分數</h3>
     <table><tr><th>面向</th><th>權重</th><th>內容</th></tr>
-      <tr><td>基本面</td><td>65%</td><td>營收預估連續上修月數 30%、近 3 月上修幅度 20%、營收距 12 月新高 20%、營收動能 15%、營收連續年增 15%（季報獲利能力累積後加入）</td></tr>
-      <tr><td>技術面</td><td>20%</td><td>站上季線但 ≤ 15%（不追高）、接近支撐（分批買進）</td></tr>
-      <tr><td>籌碼面</td><td>15%</td><td>外資持股 4 週變化 40%、集保大戶持股 4 週變化 30%、負乖離 30%</td></tr></table>
-    <p class="note">各項先在全部股票中排名（0~100），再依權重加總；乖離過大扣 15 分。分數是相對排名，不是上漲機率。這套權重是依你的投資架構設定，正在用 2018 年以來的資料驗證。</p>
+      <tr><td>基本面</td><td>100%</td><td>營收預估連續上修月數 30%、近 3 月上修幅度 20%、營收距 12 月新高 20%、營收動能 15%、營收連續年增 15%</td></tr>
+      <tr><td>技術面</td><td>參考</td><td>站上季線但 ≤ 15%、接近支撐（回測加進分數會變差，只顯示）</td></tr>
+      <tr><td>籌碼面</td><td>參考</td><td>外資持股 4 週變化、集保大戶持股 4 週變化、負乖離（同上，只顯示）</td></tr></table>
+    <p class="note">各項先在全部股票中排名（0~100），再依權重加總；乖離過大扣 15 分。分數是相對排名，不是上漲機率。
+      研究 3 用 2018~2026 資料測過：營收預估上修有效；技術面、籌碼面加進分數反而變差；停利、過熱出場也比較差。</p>
     <h3>營收預估上修</h3>
     <p>每月新營收公布後，用「近 12 個月營收 ×（1 + 近 3 個月年增率）」推估未來 12 個月營收；比上個月的推估高就是上修。從營收出發，不受業外一次性收益影響；但這是外推，不是法人預估，會比法人慢 1~2 個月。</p>
     <h3>本益比位階（買點）</h3>
@@ -474,9 +491,9 @@ async function showDetail(code) {
     <div class="dtop">
       <div>
         <div class="bigwrap">
-          <div class="cur"><span class="big">${s.s.score == null ? "—" : s.s.score.toFixed(0)}</span><span class="sub">三步驟分數 ${s.s.d5 != null ? "5日 " + signed(s.s.d5, 1, "") : ""}</span></div>
+          <div class="cur"><span class="big">${s.s.score == null ? "—" : s.s.score.toFixed(0)}</span><span class="sub">基本面分數 ${s.s.d5 != null ? "5日 " + signed(s.s.d5, 1, "") : ""}</span></div>
         </div>
-        <div class="subscores">${sub("基本面 65%", s.s.f)}${sub("技術面 20%", s.s.t)}${sub("籌碼面 15%", s.s.c)}</div>
+        <div class="subscores">${sub("基本面", s.s.f)}${sub("技術面（參考）", s.s.t)}${sub("籌碼面（參考）", s.s.c)}</div>
       </div>
       <div class="pricebox"><div class="val">${fmt(m.p)}</div><div>${signed(m.chg)} 今日</div><div>${signed(m.r20, 1)} 20 日</div></div>
     </div>
