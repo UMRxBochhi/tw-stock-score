@@ -539,7 +539,7 @@ def main():
                 out["diversified"][name] = res = div_test(N, K, E, core)
                 u.log(f"分散 {name}: " + json.dumps(res, ensure_ascii=False))
     # ---- 門檻版：符合條件的股票每檔 per_w，其餘（或沒有符合時全部）放 0050；每 E 個月檢查一次
-    def thr_test(cond, per_w, E, K=None):
+    def thr_test(cond, per_w, E, K=None, off=0, cost=COST, rnd=None, maxn=None):
         w = {}
         eq = em = pk = 1.0
         dd = 0.0
@@ -557,10 +557,13 @@ def main():
             if gone:
                 w["__0050"] = w.get("__0050", 0) + gone
             to = 0.0
-            if n % E == 0 or not w:
+            if n % E == off or not w:
                 sc = user_score(snap, FUND, None, None)
                 q, cnt = [], {}
-                for c in sorted(sc, key=lambda c: -sc[c]):
+                order = sorted(sc, key=lambda c: -sc[c])
+                if rnd is not None:
+                    rnd.shuffle(order)
+                for c in order:
                     m = snap[c]
                     if m.get("hold") is None or not cond(sc[c], m):
                         continue
@@ -569,6 +572,8 @@ def main():
                         continue
                     cnt[g] = cnt.get(g, 0) + 1
                     q.append(c)
+                    if maxn and len(q) >= maxn:
+                        break
                 n_q.append(len(q))
                 zero += not q
                 pw = min(per_w, 1 / len(q)) if q else 0
@@ -577,7 +582,7 @@ def main():
                 to = sum(abs(nw.get(c, 0) - w.get(c, 0)) for c in set(nw) | set(w)) / 2 if w else 1.0
                 w = nw
             sat.append(1 - w.get("__0050", 0))
-            r = sum(v * H(c) for c, v in w.items()) - to * COST
+            r = sum(v * H(c) for c, v in w.items()) - to * cost
             tot = sum(v * (1 + H(c)) for c, v in w.items())
             w = {c: v * (1 + H(c)) / tot for c, v in w.items()}
             eq *= 1 + r
@@ -788,6 +793,23 @@ def main():
     })
     u.log("前瞻本益比組合: " + json.dumps(out["combo_pe"], ensure_ascii=False)[:3000])
     u.log("特徵組合: " + json.dumps(out["combo"], ensure_ascii=False)[:3000])
+    # ---- 穩健性：本季名單策略換不同起始月、加倍交易成本、和隨機挑股比較
+    import random
+    uh_ = lambda v, m: up(m, 3) and hi(m)
+    rob = {}
+    for off in (0, 1, 2):
+        rob[f"起始月份錯開 {off} 個月"] = thr_test(uh_, 0.05, 3, K=2, off=off, maxn=20)
+    rob["交易成本加倍（1%）"] = thr_test(uh_, 0.05, 3, K=2, cost=0.01, maxn=20)
+    rr = [thr_test(lambda v, m: True, 0.05, 3, K=2, rnd=random.Random(sd), maxn=20) for sd in range(20)]
+    rr = [x for x in rr if x.get("年化") is not None]
+    ys = sorted(x["年化"] for x in rr)
+    rob["隨機挑 20 檔大型股（同樣每檔 5%、每產業 2 檔、其餘 0050），20 次"] = {
+        "年化中位數": ys[len(ys) // 2], "年化最低/最高": f"{ys[0]} / {ys[-1]}",
+        "2018-2023 中位數": sorted(x["2018-2023 年化"] for x in rr)[len(rr) // 2],
+        "2023-2026 中位數": sorted(x["2023-2026 年化"] for x in rr)[len(rr) // 2],
+        "0050 年化": rr[0]["0050 年化"]}
+    out["robust"] = rob
+    u.log("穩健性: " + json.dumps(rob, ensure_ascii=False)[:2000])
     out["persistence"] = persistence(records, reb, ind_of, e, di)
     u.save("research3.json", out)
 
