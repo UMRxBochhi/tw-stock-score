@@ -1675,8 +1675,8 @@ def quarter_plan(stocks, prices, last):
 
 
 # ---------------------------------------------------------------- 大跌加碼名單（2018~2026 六次大跌回測）
-# 0050 距一年高點跌超過 15% 時啟用；條件：營收預估上修中、前瞻本益比 < −0.5σ（和自己的前瞻本益比歷史比）、
-# 外資持股 ≥ 20%、近 3 年營收年複合成長 ≥ 10%、電子股、市值 ≥ 100 億。回測持有 12 個月：單檔贏 0050 約 6 成，6 次大跌組合都贏。
+# 0050 距一年高點跌超過 15% 時啟用；候選：營收預估上修中、前瞻本益比 < −0.5σ（和自己的前瞻本益比歷史比）、市值 ≥ 100 億；
+# 依外資持股 40%＋近 3 年營收成長 40%＋市值 20% 排序取前 10。回測持有 12 個月：6 次大跌組合都贏 0050，單檔約 6 成贏。
 CRASH_DD, CRASH_QF, CRASH_CAGR = -0.15, 20.0, 0.10
 TECH_KW = ("半導體", "電子", "電腦", "通信", "光電", "資訊")
 
@@ -1729,8 +1729,6 @@ def crash_plan(stocks, prices, last, pe_monthly, fund):
         m, c = x["m"], x["c"]
         if (m.get("cap") or 0) < MIN_CAP or (m.get("rev_up_n") or 0) < 1 or not m.get("pe") or m["pe"] <= 0:
             continue
-        if not any(k in (x.get("ind") or "") for k in TECH_KW) or (m.get("qf") or 0) < CRASH_QF:
-            continue
         h = revh.get(c, {})
         if not h:
             continue
@@ -1740,8 +1738,6 @@ def crash_plan(stocks, prices, last, pe_monthly, fund):
         if None in cur12 + old12 or sum(old12) <= 0:
             continue
         cagr3 = (sum(cur12) / sum(old12)) ** (1 / 3) - 1
-        if cagr3 < CRASH_CAGR:
-            continue
         fn = factor(h, rk)
         if not fn or fn <= 0:
             continue
@@ -1762,11 +1758,21 @@ def crash_plan(stocks, prices, last, pe_monthly, fund):
         m["cagr3"] = round(cagr3 * 100, 1)
         if zf < -0.5:
             rows.append(x)
-    rows.sort(key=lambda x: -(x["m"].get("qf") or 0))      # 大跌時外資持股是最能分辨好壞的特徵（6/6 次）
+    # 排序：外資持股 40%＋近 3 年營收成長 40%＋市值 20%（池內百分位）。回測 6 次大跌取前 10：組合都贏 0050；
+    # 只看單一指標或加入「更便宜」都比較差
+    def pr(k):
+        v = sorted(x["m"].get(k) or 0 for x in rows)
+        return {x["c"]: sum(1 for a in v if a < (x["m"].get(k) or 0)) / len(v) for x in rows}
+    if rows:
+        rq, rg, rc = pr("qf"), pr("cagr3"), pr("cap")
+        for x in rows:
+            x["m"]["crash_sc"] = round((0.4 * rq[x["c"]] + 0.4 * rg[x["c"]] + 0.2 * rc[x["c"]]) * 100)
+    rows.sort(key=lambda x: -x["m"]["crash_sc"])
     return {"dd": round(dd * 100, 1) if dd is not None else None, "active": dd is not None and dd <= CRASH_DD,
-            "n": len(rows), "codes": [x["c"] for x in rows[:30]],
-            "rows": [{"c": x["c"], "zf": x["m"]["fpe_zf"], "qf": x["m"].get("qf"), "cagr3": x["m"]["cagr3"],
-                      "up": x["m"].get("rev_up_n")} for x in rows[:30]]}
+            "n": len(rows), "codes": [x["c"] for x in rows[:10]],
+            "rows": [{"c": x["c"], "sc": x["m"]["crash_sc"], "zf": x["m"]["fpe_zf"], "qf": x["m"].get("qf"),
+                      "cagr3": x["m"]["cagr3"], "cap": round((x["m"].get("cap") or 0) / 1e8), "up": x["m"].get("rev_up_n")}
+                     for x in rows[:10]]}
 
 
 def _shift(k, n):

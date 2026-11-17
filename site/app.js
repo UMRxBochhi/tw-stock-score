@@ -271,10 +271,11 @@ function crashHtml() {
     ? `<span class="chip warn">已啟用</span> 0050 距一年高點 ${k.dd}%（跌超過 15%）：可以分 2~3 次加碼 0050，並買進下面這組股票（持有 12 個月）。`
     : `<span class="chip neutral">未啟用</span> 0050 距一年高點 ${k.dd ?? "—"}%；跌超過 15% 才啟用。下面是目前符合條件的股票，先當觀察。`;
   return `<div style="margin-top:10px"><b>大跌加碼名單</b>　<span class="note">${head}</span>
-    <p class="note">條件：營收預估上修中、前瞻本益比 &lt; −0.5σ（和自己過去 5 年的前瞻本益比比）、外資持股 ≥ 20%、近 3 年營收年成長 ≥ 10%、電子股、市值 ≥ 100 億。
-      依外資持股排序（大跌時最能分辨好壞的特徵）；目前符合 ${k.n ?? 0} 檔。回測 2020~2025 共 6 次大跌，持有 12 個月單檔約 6 成贏 0050、組合 6 次都贏；但樣本少，而且下跌途中買進可能先套一段，所以要分批。</p>
-    ${k.rows?.length ? `<table class="kv"><tr><td>股票</td><td>前瞻位階</td><td>外資持股</td><td>3 年營收年成長</td><td>連續上修</td></tr>${k.rows.map((r) =>
-      `<tr><td>${nm(r.c)}</td><td>${r.zf}σ</td><td>${r.qf ?? "—"}%</td><td>${r.cagr3}%</td><td>${r.up} 月</td></tr>`).join("")}</table>` : '<p class="note">目前沒有符合的股票。</p>'}</div>`;
+    <p class="note">候選：營收預估上修中、前瞻本益比 &lt; −0.5σ（和自己過去 5 年的前瞻本益比比）、市值 ≥ 100 億，目前 ${k.n ?? 0} 檔；
+      依「外資持股 40%＋近 3 年營收成長 40%＋市值 20%」排序取前 10（便不便宜在候選內沒有分辨力，不加分）。
+      回測 2020~2025 共 6 次大跌，持有 12 個月組合都贏 0050、單檔約 6 成贏；但樣本少，而且下跌途中買進可能先套一段，所以要分批。</p>
+    ${k.rows?.length ? `<table class="kv"><tr><td>股票</td><td>排序分數</td><td>外資持股</td><td>3 年營收年成長</td><td>市值（億）</td><td>前瞻位階</td><td>連續上修</td></tr>${k.rows.map((r) =>
+      `<tr><td>${nm(r.c)}</td><td>${r.sc}</td><td>${r.qf ?? "—"}%</td><td>${r.cagr3}%</td><td>${r.cap.toLocaleString()}</td><td>${r.zf}σ</td><td>${r.up} 月</td></tr>`).join("")}</table>` : '<p class="note">目前沒有符合的股票。</p>'}</div>`;
 }
 
 // ---------- 第三步：持股監控
