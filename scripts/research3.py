@@ -653,6 +653,75 @@ def main():
         "分數 ≥ 80": cond_test(lambda v, m: v >= 80),
     }
     u.log("條件分組: " + json.dumps(out["conditional"], ensure_ascii=False)[:3000])
+    # ---- 特徵組合的個股勝率：每月起點、市值 ≥ 100 億，符合條件的個股持有 H 個月 vs 0050
+    def combo_test():
+        pos = lambda m: -m["val_cheap"] if m.get("val_cheap") is not None else None
+        cheap = lambda m: pos(m) is not None and pos(m) < 31          # 約 −0.5σ 以下
+        fair = lambda m: pos(m) is not None and pos(m) <= 69          # 約 +0.5σ 以下
+        rich = lambda m: pos(m) is not None and pos(m) > 69
+        CS = {
+            "全部（市值 ≥ 100 億）": lambda m: True,
+            "本益比便宜（< −0.5σ）": cheap,
+            "營收連續上修 ≥ 2 個月": lambda m: up(m, 2),
+            "營收連續上修 ≥ 3 個月": lambda m: up(m, 3),
+            "上修 ≥ 2＋本益比便宜": lambda m: up(m, 2) and cheap(m),
+            "上修 ≥ 3＋本益比便宜": lambda m: up(m, 3) and cheap(m),
+            "上修 ≥ 3＋本益比不貴（≤ +0.5σ）": lambda m: up(m, 3) and fair(m),
+            "上修 ≥ 3＋本益比偏貴（> +0.5σ）": lambda m: up(m, 3) and rich(m),
+            "上修 ≥ 3＋創新高": lambda m: up(m, 3) and hi(m),
+            "上修 ≥ 3＋創新高＋本益比便宜": lambda m: up(m, 3) and hi(m) and cheap(m),
+            "上修 ≥ 3＋創新高＋本益比不貴": lambda m: up(m, 3) and hi(m) and fair(m),
+            "上修 ≥ 6＋創新高＋本益比不貴": lambda m: up(m, 6) and hi(m) and fair(m),
+        }
+        res = {}
+        for H in (3, 6, 12):
+            ev = {k: [] for k in CS}
+            bk = {k: [] for k in CS}
+            for n, idx in enumerate(reb[:-H]):
+                t, snap = records[idx]
+                fut = [records[reb[n + j]][1] for j in range(H)]
+                if any(not f.get("__mkt") for f in fut):
+                    continue
+                mk = 1.0
+                for f in fut:
+                    mk *= 1 + f["__mkt"]["hold"]
+                rets = {}
+                for c, m in snap.items():
+                    if c.startswith("__") or (m.get("cap") or 0) < MIN_CAP:
+                        continue
+                    g = 1.0
+                    for f in fut:
+                        h = (f.get(c) or {}).get("hold")
+                        if h is None:
+                            g = None
+                            break
+                        g *= 1 + h
+                    if g is not None:
+                        rets[c] = g - mk
+                for k, fn in CS.items():
+                    xs = [rets[c] for c in rets if fn(snap[c])]
+                    ev[k] += [(t, x) for x in xs]
+                    if len(xs) >= 3:
+                        bk[k].append((t, sum(xs) / len(xs)))
+            out_h = {}
+            for k in CS:
+                e_, b_ = ev[k], bk[k]
+                if not e_:
+                    continue
+                xs = sorted(x for _, x in e_)
+                wr = lambda a: round(sum(x > 0 for _, x in a) / len(a) * 100, 1) if a else None
+                out_h[k] = {"事件數": len(e_), "個股贏 0050 機率": wr(e_),
+                            "個股平均超額": round(sum(xs) / len(xs) * 100, 1), "個股超額中位數": round(xs[len(xs) // 2] * 100, 1),
+                            "組合贏 0050 機率": wr(b_), "組合平均超額": round(sum(x for _, x in b_) / len(b_) * 100, 1) if b_ else None,
+                            "組合 t": (lambda tt: tt and round(tt, 2))(b.nw_t([x for _, x in b_], H - 1)) if len(b_) >= 10 else None,
+                            "前段/後段 組合勝率": f"{wr([x for x in b_ if x[0] < SPLIT])} / {wr([x for x in b_ if x[0] >= SPLIT])}",
+                            "前段/後段 個股勝率": f"{wr([x for x in e_ if x[0] < SPLIT])} / {wr([x for x in e_ if x[0] >= SPLIT])}",
+                            "平均每次檔數": round(len(e_) / max(1, len(b_)), 1)}
+            res[f"持有 {H} 個月"] = out_h
+        return res
+
+    out["combo"] = combo_test()
+    u.log("特徵組合: " + json.dumps(out["combo"], ensure_ascii=False)[:3000])
     out["persistence"] = persistence(records, reb, ind_of, e, di)
     u.save("research3.json", out)
 
