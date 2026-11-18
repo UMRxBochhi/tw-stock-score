@@ -853,6 +853,8 @@ def main():
     ent = lambda m: (m.get("rev_up_n") or 0) >= 1 and (m.get("qf") or 0) >= 20 and m.get("cagr3") is not None and m["cagr3"] >= 0.10
     dd_ = lambda sl, k: sl["g"] / sl["pk"] <= 1 - k
     EX2 = {
+        "每季重挑前 10（網站目前做法：不在前 10 就換）": lambda sl, m, rk: sl["mo"] % 3 == 0 and rk >= 10,
+        "每季重挑前 10，或從高點回落 30%": lambda sl, m, rk: (sl["mo"] % 3 == 0 and rk >= 10) or dd_(sl, 0.30),
         "每季檢查，不符合條件才下車": lambda sl, m, rk: sl["mo"] % 3 == 0 and not ent(m),
         "每月檢查，不符合條件就下車": lambda sl, m, rk: not ent(m),
         "從高點回落 20% 就下車": lambda sl, m, rk: dd_(sl, 0.20),
