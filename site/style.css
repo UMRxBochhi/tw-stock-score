@@ -335,3 +335,10 @@ tr.sel { background: rgba(42, 120, 214, .14); }
 .kv.steps td:first-child { width: 90px; font-weight: 600; color: var(--text-primary); }
 .subscores .row { grid-template-columns: 96px 1fr 32px; }
 .kv.steps td, #watchInfo .kv td { text-align: left !important; }
+
+/* 持股監控：買進價／日期 */
+.rulebox .watchkv td { text-align: left; vertical-align: top; }
+.costin { white-space: nowrap; }
+.costin input { width: 92px; padding: 3px 6px; margin: 1px 0; font: inherit; font-size: 13px; color: inherit;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px; }
+.costin input[type="date"] { width: 132px; }

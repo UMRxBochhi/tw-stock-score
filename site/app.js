@@ -10,6 +10,7 @@ const state = {
   data: null, tab: "win", sort: null, asc: false,
   f: Object.fromEntries(Object.entries(LS.get("filters", {})).map(([k, v]) => [k === "short" || k === "long" ? "score" : k, v])),
   watch: new Set(LS.get("watch", [])), // 自選股
+  cost: LS.get("cost", {}),             // 持股監控：{代號: {p: 買進價, d: "YYYY-MM-DD"}}，存在這台裝置
 };
 const STRAT_NAME = { short: "短線", long: "長線" };
 
@@ -97,7 +98,7 @@ function cell(key, s) {
 const TABCOLS = {
   step2: ["p", "chg", "score", "rev_up_n", "cons_chg", "qf", "cagr3", "pe_z", "cap"],
   crash: ["p", "chg", "crash_sc", "crash_beta", "qf", "cagr3", "fpe_zf", "rev_up_n", "cons_chg", "cap"],
-  watch: ["p", "chg", "score", "rev_up_n", "rev_rev3", "pe_z", "b20", "b60", "qd4"],
+  watch: ["p", "chg", "score", "rev_up_n", "rev_rev3", "fpe_zf", "pe_z", "b60", "qd4"],
   screen: ["p", "chg", "score", "f", "t", "c", "rev_up_n", "rev_rev3", "rev_hi", "pe_z", "opm", "qf", "cap"],
 };
 const DEFAULT_SORT = { step2: [null, false], crash: [null, false], watch: ["score", false], screen: ["score", false] };
@@ -251,6 +252,9 @@ function renderMarket() {
   if (q.codes) cards.push(`<div class="card"><div class="lbl">② 選股名單</div><div class="val">${q.codes.length} 檔・${esc(q.level_now || "")}</div>
     <div class="note">建議個股 ${q.stock_w}%、其餘 0050；下次換股 ${q.next}　<a href="#" data-gotab="step2">看名單 →</a></div></div>`);
   const k = state.data.crash;
+  const t = k?.trio;
+  if (t?.active) cards.push(`<div class="card"><div class="lbl">三檔組合</div><div class="val">已啟用</div>
+    <div class="note">0050 在半年線下 ${t.gap}%：${(t.codes || []).map(stockName).join("、") || "沒有符合的股票"}　<a href="#" data-gotab="crash">看說明 →</a></div></div>`);
   if (k?.active) cards.push(`<div class="card"><div class="lbl">大跌加碼名單</div><div class="val">已啟用・${k.n} 檔</div>
     <div class="note">0050 距一年高點 ${k.dd}%　<a href="#" data-gotab="crash">看名單 →</a></div></div>`);
   $("#market").innerHTML = cards.join("");
@@ -286,7 +290,26 @@ function renderStep2Info() {
 }
 
 function renderCrashInfo() {
-  $("#ruleInfo").innerHTML = `<div class="rulebox">${crashHtml()}</div>`;
+  $("#ruleInfo").innerHTML = `<div class="rulebox">${trioHtml()}</div><div class="rulebox">${crashHtml()}</div>`;
+}
+
+const stockName = (c) => esc(state.data.stocks.find((s) => s.c === c)?.n || c);
+const stockLink = (c) => `<a href="#${c}" data-open="${c}">${c} ${stockName(c)}</a>`;
+
+function trioHtml() {
+  const t = state.data.crash?.trio;
+  if (!t) return "";
+  const head = t.active
+    ? `<span class="chip warn">已啟用</span> 0050 收盤 ${t.p50} 在半年線 ${t.ma120} 之下（${t.gap}%）：等金額買下面 3 檔，各自賺 20% 就換成 0050，沒到就抱 12 個月。`
+    : `<span class="chip neutral">未啟用</span> 0050 在半年線之上（${t.gap > 0 ? "+" : ""}${t.gap ?? "—"}%）；跌破半年線才啟用。平常時期同樣挑法只有約 6 成勝率而且不穩，先放 0050。`;
+  const picks = (t.codes || []).map(stockLink).join("、") || "目前沒有符合的股票";
+  const rest = (t.all || []).slice(3).map(stockLink).join("、");
+  return `<div><b>三檔組合</b>　<span class="note">${head}</span>
+    <p>前 3 名：${picks}${(t.codes || []).length < 3 ? "（不足 3 檔，其餘放 0050）" : ""}</p>
+    <p class="note">候選：選股名單條件（市值 ≥ 100 億、營收預估上修中、外資持股 ≥ 30%、近 3 年營收成長 ≥ 10%）＋最新月營收創 12 個月新高，目前 ${t.n ?? 0} 檔；
+      依外資持股 30%＋3 年營收成長 30%＋beta 40% 排序。${rest ? "其餘候選：" + rest + "。" : ""}</p>
+    <p class="note">回測 2019~2025：0050 在半年線下的 15 個月份，照這樣買 3 檔，有 93% 的月份 12 個月後贏 0050（平均多 10%，最差一次 −5.6%；2019~22 是 91%、2023 後 100%）；
+      同樣規則在半年線上只有 62%，所以只在半年線下啟用。限制：只有 5 個年份的樣本；高 beta 股如果續跌會跌得比 0050 多；報酬不含股利。</p></div>`;
 }
 
 function crashHtml() {
@@ -310,6 +333,9 @@ function holdAdvice(s) {
   const q = state.data.step2 || {}, k = state.data.crash || {};
   // 兩份名單分開寫，不互相覆蓋
   const acts = [];
+  const ti = (k.trio?.codes || []).indexOf(s.c);
+  if (ti >= 0) acts.push([k.trio.active ? "good" : "neutral",
+    `三檔組合第 ${ti + 1} 名${k.trio.active ? "（已啟用）：賺 20% 換 0050，最長 12 個月" : "（未啟用）"}`]);
   const ki = (k.codes || []).indexOf(s.c);
   if (ki >= 0) acts.push([k.active ? "good" : "neutral",
     `大跌加碼名單第 ${ki + 1} 名${k.active ? "（已啟用）：分批買、持有 12 個月" : "（未啟用）"}`]);
@@ -333,18 +359,37 @@ function holdAdvice(s) {
   if (m.cagr3 != null) out.push([m.cagr3 >= 10 ? "good" : "neutral", `3 年營收年成長 ${m.cagr3}%`]);
   if (m.news_up) out.push(["good", `法人上調 ${m.news_up} 則`]);
   if (m.news_dn) out.push(["warn", `法人下調 ${m.news_dn} 則`]);
-  return { act, cls, out };
+  // 下車提示（勝率研究）：賺 20% 換 0050、持有滿 12 個月、前瞻本益比回到平均
+  const ex = [];
+  const cst = state.cost[s.c] || {};
+  if (cst.p > 0 && m.p) {
+    const r = (m.p / cst.p - 1) * 100;
+    ex.push(r >= 20 ? ["warn", `已賺 ${r.toFixed(1)}%：達 +20%，可換成 0050`]
+      : ["neutral", `目前 ${r >= 0 ? "+" : ""}${r.toFixed(1)}%，離 +20% 還差 ${((cst.p * 1.2 / m.p - 1) * 100).toFixed(1)}%`]);
+  }
+  if (cst.d) {
+    const mo = (Date.now() - new Date(cst.d).getTime()) / (30.44 * 864e5);
+    ex.push(mo >= 12 ? ["warn", `已持有 ${mo.toFixed(0)} 個月：滿 12 個月，可換成 0050`] : ["neutral", `已持有 ${mo.toFixed(1)} 個月`]);
+  }
+  // 前瞻本益比回到平均：單檔回測賣出勝率較高；三檔組合不用這條（只看 +20% 與 12 個月），所以只當參考、不標紅
+  if (m.fpe_zf != null) ex.push(m.fpe_zf >= 0 ? ["neutral", `前瞻本益比已回到平均以上（${m.fpe_zf}σ）`] : ["good", `前瞻本益比低於平均（${m.fpe_zf}σ）`]);
+  return { act, cls, out, ex };
 }
 function renderStep3() {
   const list = state.data.stocks.filter((s) => state.watch.has(s.c));
   if (!list.length) { $("#watchInfo").innerHTML = '<div class="rulebox"><b>③ 持股監控</b><p class="note">還沒有持股。在任何清單點 ☆ 加入，這裡會每天檢查它還在不在選股名單、大跌名單。</p></div>'; return; }
-  $("#watchInfo").innerHTML = `<div class="rulebox"><b>③ 持股監控</b>　<span class="note">每天收盤後更新；選股名單符合條件就續抱、回落 30% 下車；大跌名單持有 12 個月</span>
-    <table class="kv" style="margin-top:8px"><tr><td>股票</td><td>建議</td><td>訊號</td></tr>
-    ${list.map((s) => { const a = holdAdvice(s); return `<tr><td><a href="#${s.c}" data-open="${s.c}">${s.c} ${esc(s.n)}</a></td>
-      <td><span class="chip ${a.cls}">${a.act}</span></td><td>${a.out.map(([c, t]) => `<span class="chip ${c}">${t}</span>`).join(" ") || NA}</td></tr>`; }).join("")}
+  const chips = (xs) => xs.map(([c, t]) => `<span class="chip ${c}">${t}</span>`).join(" ") || NA;
+  $("#watchInfo").innerHTML = `<div class="rulebox"><b>③ 持股監控</b>　<span class="note">每天收盤後更新；三檔組合賺 20% 換 0050、最長 12 個月；選股名單符合條件就續抱、回落 30% 下車；大跌名單持有 12 個月</span>
+    <table class="kv watchkv" style="margin-top:8px"><tr><td>股票</td><td>買進價／日期</td><td>建議</td><td>下車提示</td><td>訊號</td></tr>
+    ${list.map((s) => { const a = holdAdvice(s), cst = state.cost[s.c] || {}; return `<tr><td><a href="#${s.c}" data-open="${s.c}">${s.c} ${esc(s.n)}</a></td>
+      <td class="costin"><input type="number" min="0" step="0.01" inputmode="decimal" placeholder="買進價" data-cost="${s.c}" value="${cst.p ?? ""}">
+        <input type="date" data-costd="${s.c}" value="${cst.d ?? ""}"></td>
+      <td><span class="chip ${a.cls}">${a.act}</span></td><td>${chips(a.ex)}</td><td>${chips(a.out)}</td></tr>`; }).join("")}
     </table>
-    <p class="note"><b>下車規則怎麼來的</b>：回測比較過各種出場方式。最好的是「換股日不符合條件才換＋從買進後高點回落 30% 提前下車」；
-      回落 20% 就跑太容易被洗掉，賺 50% 就走、過熱停利、本益比太貴就賣都會提早賣掉大漲的股票，永遠不賣則會遇到宏達電式的大虧。</p></div>`;
+    <p class="note">買進價、日期只存在這台裝置的瀏覽器裡。</p>
+    <p class="note"><b>下車規則怎麼來的</b>：停損一律讓勝率變低——最後贏 0050 的股票，中途從高點回落的中位數約 30%，約 8 成碰過回落 20%，停損設太緊會被洗掉。
+      想要勝率高：<b>賺 20% 就換成 0050</b>（單檔勝率約 7 成，但平均賺得較少），或<b>前瞻本益比回到平均（0σ）就賣</b>（勝率提高 4~10 個百分點、保留大部分報酬）。
+      選股名單是以總報酬為目標，所以用「不符合條件才換＋回落 30% 下車」。</p></div>`;
 }
 
 let etfState = { kind: "", sort: "avgval", asc: false };
@@ -474,6 +519,7 @@ function renderHow() {
     <p><b>① 趨勢族群</b>：先看族群分數，只往下看前段族群。族群分數 = 族群內公司的近 3 月營收年增中位數 30%、營收創 12 個月新高的比例 25%、營收動能 20%、營收預估連續上修 ≥ 2 個月的比例 25%（族群之間排名）。
        「產業族群」用證交所產業分類；AI 等趨勢用人工整理的產業鏈環節（data/themes.json，可自行修改）。</p>
     <p><b>② 選股名單</b>：市值 ≥ 100 億、營收預估上修中、外資持股 ≥ 30%、近 3 年營收年成長 ≥ 10%，最多 10 檔；每月 11 日後檢查，不符合才換、從買進後高點回落 30% 提前下車，其餘資金放 0050。族群分數只當趨勢參考，不用來篩選（回測篩族群會錯過台積電等大型股）。</p>
+    <p><b>三檔組合</b>：0050 跌破半年線（120 日均線）時啟用。從「選股名單條件＋最新月營收創 12 個月新高」依外資持股 30%＋3 年營收成長 30%＋beta 40% 取前 3 檔、等金額買，各自賺 20% 就換成 0050，沒到就抱 12 個月。回測 15 個月份有 93% 贏 0050；半年線上時同樣做法只有 62%，所以平常不啟用。</p>
     <p><b>大跌加碼名單</b>：0050 距一年高點跌超過 15% 時啟用。候選是營收上修中的大型股（市值 ≥ 100 億），依外資持股 30%＋3 年營收成長 30%＋大跌前一年 beta 40% 排序取前 10，分批買、持有 12 個月。</p>
     <p><b>③ 持股監控</b>：☆ 加入的股票每天檢查還在不在名單、有沒有從高點回落 30%。不設「賺多少就走」（回測較差）。</p>
     <h3>分數</h3>
@@ -493,6 +539,8 @@ function renderHow() {
     <ul>
       <li>有效：營收預估上修、營收創新高、外資持股比例高、近 3 年營收長期成長、分散 10~20 檔、每季換股。</li>
       <li>無效或更差：技術面（站上季線、支撐、乖離）、籌碼變化（外資 4 週變化、法人買賣超）、先篩族群、停利／停損／過熱出場、判斷多空再進場、逢低買、平常時期用本益比位階挑買點。</li>
+      <li>市場狀態比挑哪檔更重要：0050 在半年線下、距高點超過 15%、近一年下跌時，品質好的 3 檔組合大多贏 0050；接近高點、波動低、台積電領漲時，勝率只有 4~5 成。</li>
+      <li>單檔勝率：任意大型股 12 個月贏 0050 只有 32%；只看本益比便宜 41%；營收上修＋創新高＋外資持股高＋長期成長約 6 成。停損會讓勝率變低，賺 20% 就走、前瞻本益比回到平均就賣會讓勝率變高。</li>
       <li>大跌時（5 次）：抗跌股、低 beta 防禦股、只挑便宜、外資逆勢加碼的股票，之後 12 個月都落後 0050；高 beta、電子股、外資持股高、營收創新高的反彈最強。</li>
       <li>單一個股贏 0050 的機率幾乎都 &lt; 50%；組合能贏是因為少數大贏家把平均拉高，所以要買一組、不要押單檔。</li>
       <li>仍不保證：大約一半的月份會輸 0050，0050 仍建議當核心。</li>
@@ -844,6 +892,17 @@ document.addEventListener("click", (e) => {
   if (gt) { e.preventDefault(); setTab(gt.dataset.gotab); return; }
   const gi = e.target.closest("[data-goind]");
   if (gi) { e.preventDefault(); $("#ind").value = gi.dataset.goind; setTab("screen"); return; }
+});
+document.addEventListener("change", (e) => {
+  const el = e.target.closest("[data-cost],[data-costd]");
+  if (!el) return;
+  const c = el.dataset.cost || el.dataset.costd;
+  const cur = { ...(state.cost[c] || {}) };
+  if (el.dataset.cost) { const v = parseFloat(el.value); if (v > 0) cur.p = v; else delete cur.p; }
+  else if (el.value) cur.d = el.value; else delete cur.d;
+  if (Object.keys(cur).length) state.cost[c] = cur; else delete state.cost[c];
+  LS.set("cost", state.cost);
+  renderStep3();
 });
 $("#tableWrap").addEventListener("click", (e) => {
   const th = e.target.closest("th[data-k]");

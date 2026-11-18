@@ -1644,6 +1644,8 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
         (sdir / f"{code}.json").write_text(json.dumps(det, ensure_ascii=False, separators=(",", ":")),
                                             encoding="utf-8")
 
+    add_cagr3(stocks, fund)
+    add_fwd_z(stocks, pe_monthly, fund)      # 研究版前瞻本益比位階：持股監控「回到 0σ」與大跌名單用
     return {
         "market": market,
         "industries": industries,
@@ -1701,14 +1703,64 @@ Q_STOP = 0.30     # 從買進後最高點回落 30% 就提前下車
 # 賺 50% 就走 23.2%、永遠不賣 18.8%（有一半的下車是虧超過 30%）
 
 
+_REVH = None
+
+
+def load_revh(fund):
+    """月營收歷史（data/hist/rev.json＋最新），整次執行只讀一次"""
+    global _REVH
+    if _REVH is None:
+        revh = {}
+        p = DATA / "hist" / "rev.json"
+        if p.exists():
+            revh = json.loads(p.read_text(encoding="utf-8"))
+        for c, h in fund.get("rev_hist", {}).items():
+            revh.setdefault(c, {}).update(h)
+        _REVH = revh
+    return _REVH
+
+
+def add_fwd_z(stocks, pe_monthly, fund):
+    """前瞻本益比位階 σ（研究版，fpe_zf）：目前本益比 ÷（1 + 營收預估成長），
+    和自己過去 5 年每個月「當時的前瞻本益比」比（取對數算平均、標準差）。回測：回到 0σ 就賣，勝率較高"""
+    import math as _m
+    revh = load_revh(fund)
+    rev = fund.get("revenue", {})
+    pkeys = sorted(pe_monthly)[-60:]
+    fc = {}
+
+    def factor(c, h, rk):
+        if (c, rk) not in fc:
+            cur = [h.get(_shift(rk, i), [None])[0] for i in range(12)]
+            e = est12(h, rk)
+            fc[(c, rk)] = e / sum(cur) if e and None not in cur and sum(cur) > 0 else None
+        return fc[(c, rk)]
+
+    for x in stocks:
+        m, c = x["m"], x["c"]
+        h = revh.get(c)
+        if not h or not m.get("pe") or m["pe"] <= 0 or industry(c, rev) in FWD_SKIP_IND:
+            continue
+        fn = factor(c, h, max(h))
+        if not fn or fn <= 0:
+            continue
+        fh = []
+        for k in pkeys:
+            v = (pe_monthly[k].get(c) or [None])[0]
+            f = factor(c, h, _roc_prev(k)) if v and v > 0 else None
+            if f and f > 0:
+                fh.append(_m.log(v / f))
+        if len(fh) < 24:
+            continue
+        mu = sum(fh) / len(fh)
+        sd = (sum((a - mu) ** 2 for a in fh) / len(fh)) ** 0.5
+        if sd > 0:
+            m["fpe_zf"] = round((_m.log(m["pe"] / fn) - mu) / sd, 2)
+
+
 def add_cagr3(stocks, fund):
     """近 3 年營收年複合成長（%）＝近 12 個月營收 vs 36 個月前的近 12 個月營收"""
-    revh = {}
-    p = DATA / "hist" / "rev.json"
-    if p.exists():
-        revh = json.loads(p.read_text(encoding="utf-8"))
-    for c, h in fund.get("rev_hist", {}).items():
-        revh.setdefault(c, {}).update(h)
+    revh = load_revh(fund)
     for x in stocks:
         h = revh.get(x["c"])
         if not h:
@@ -1852,6 +1904,7 @@ def quarter_plan(stocks, prices, last, fund):
 # 大跌期間抗跌的、本益比便宜的、低 beta 的，之後反而落後 → 前瞻本益比位階只顯示、不篩選。
 CRASH_DD = -0.15
 CRASH_W = {"qf": 0.3, "cagr3": 0.3, "beta": 0.4}
+TRIO_QF, TRIO_CAGR = 30.0, 10.0      # 三檔組合候選：外資持股 ≥ 30%、近 3 年營收成長 ≥ 10%（%）
 
 
 def _roc_prev(ym: str) -> str:
@@ -1904,78 +1957,58 @@ def crash_plan(stocks, prices, last, pe_monthly, fund):
         vm = sum((y - mm) ** 2 for y in rm)
         return sum((x - ma) * (y - mm) for x, y in zip(ra, rm)) / vm if vm else None
 
-    revh = {}
-    p = DATA / "hist" / "rev.json"
-    if p.exists():
-        revh = json.loads(p.read_text(encoding="utf-8"))
-    for c, h in fund.get("rev_hist", {}).items():
-        revh.setdefault(c, {}).update(h)
-
-    def factor(h, rk):
-        cur = [h.get(_shift(rk, i), [None])[0] for i in range(12)]
-        e = est12(h, rk)
-        return e / sum(cur) if e and None not in cur and sum(cur) > 0 else None
-
-    def fwd_z(c, m, h, rk):
-        """前瞻本益比位階 σ（只顯示，不篩選）"""
-        if not m.get("pe") or m["pe"] <= 0:
-            return None
-        fn = factor(h, rk)
-        if not fn or fn <= 0:
-            return None
-        fh = []
-        for k in pkeys:
-            v = (pe_monthly[k].get(c) or [None])[0]
-            f = factor(h, _roc_prev(k)) if v and v > 0 else None
-            if f and f > 0:
-                fh.append(_m.log(v / f))
-        if len(fh) < 24:
-            return None
-        mu = sum(fh) / len(fh)
-        sd = (sum((a - mu) ** 2 for a in fh) / len(fh)) ** 0.5
-        return round((_m.log(m["pe"] / fn) - mu) / sd, 2) if sd > 0 else None
-
-    pkeys = sorted(pe_monthly)[-60:]
+    # 3 年成長（cagr3）與前瞻本益比位階（fpe_zf）已由 add_cagr3 / add_fwd_z 算好
     rows = []
     for x in stocks:
         m, c = x["m"], x["c"]
         if (m.get("cap") or 0) < MIN_CAP or (m.get("rev_up_n") or 0) < 1:
             continue
-        h = revh.get(c, {})
-        cagr3 = None
-        if h:
-            rk = max(h)
-            cur12 = [h.get(_shift(rk, i), [None])[0] for i in range(12)]
-            old12 = [h.get(_shift(rk, i + 36), [None])[0] for i in range(12)]
-            if None not in cur12 + old12 and sum(old12) > 0 and sum(cur12) > 0:
-                cagr3 = (sum(cur12) / sum(old12)) ** (1 / 3) - 1
-            m["fpe_zf"] = fwd_z(c, m, h, rk)
-        if cagr3 is not None:
-            m["cagr3"] = round(cagr3 * 100, 1)
         bt = beta_of(c)
         m["crash_beta"] = round(bt, 2) if bt is not None else None
         rows.append(x)
     # 排序：外資持股 30%＋近 3 年營收成長 30%＋beta 40%（候選內百分位；缺資料的項目不計，至少要有一半權重）
     keymap = {"qf": "qf", "cagr3": "cagr3", "beta": "crash_beta"}
 
-    def pr(k):
-        v = sorted(x["m"][k] for x in rows if x["m"].get(k) is not None)
-        return {x["c"]: sum(1 for a in v if a < x["m"][k]) / max(1, len(v) - 1)
-                for x in rows if x["m"].get(k) is not None}
-    rk_ = {w: pr(keymap[w]) for w in CRASH_W}
+    def score(pool):
+        def pr(k):
+            v = sorted(x["m"][k] for x in pool if x["m"].get(k) is not None)
+            return {x["c"]: (sum(1 for a in v if a < x["m"][k]) + sum(1 for a in v if a <= x["m"][k]) - 1) / 2 / max(1, len(v) - 1)
+                    for x in pool if x["m"].get(k) is not None}
+        rk_ = {w: pr(keymap[w]) for w in CRASH_W}
+        out = {}
+        for x in pool:
+            parts = [(rk_[w][x["c"]], wt) for w, wt in CRASH_W.items() if x["c"] in rk_[w]]
+            tw = sum(wt for _, wt in parts)
+            if tw >= 0.5:
+                out[x["c"]] = round(sum(v * wt for v, wt in parts) / tw * 100)
+        return out
+
+    sc = score(rows)
     for x in rows:
-        parts = [(rk_[w][x["c"]], wt) for w, wt in CRASH_W.items() if x["c"] in rk_[w]]
-        tw = sum(wt for _, wt in parts)
-        x["m"]["crash_sc"] = round(sum(v * wt for v, wt in parts) / tw * 100) if tw >= 0.5 else None
+        x["m"]["crash_sc"] = sc.get(x["c"])
     rows = [x for x in rows if x["m"]["crash_sc"] is not None]
     rows.sort(key=lambda x: -x["m"]["crash_sc"])
+    # 三檔組合（research_winrate.py）：0050 跌破半年線時，從「選股名單條件＋營收創新高」依同樣排序（在這個候選池內重排）取前 3，
+    # 賺 20% 就轉 0050、沒到就抱 12 個月。回測 15 個月份（2019~2025、跨 5 年）組合贏 0050 93%、平均超額 +10%、最差 −5.6%；
+    # 0050 在半年線上時同規則只有 62% 且前後段不穩，所以只在半年線下啟用
+    ma120 = sum(e50[-120:]) / 120 if len(e50) >= 120 and all(e50[-120:]) else None
+    below = ma120 is not None and e50[-1] < ma120
+    tpool = [x for x in rows if (x["m"].get("qf") or 0) >= TRIO_QF and x["m"].get("cagr3") is not None
+             and x["m"]["cagr3"] >= TRIO_CAGR and x["m"].get("rev_hi") is not None and x["m"]["rev_hi"] >= 0]
+    tsc = score(tpool)
+    for x in tpool:
+        x["m"]["trio_sc"] = tsc.get(x["c"])
+    tpool = sorted([x for x in tpool if x["m"].get("trio_sc") is not None], key=lambda x: -x["m"]["trio_sc"])
     return {"dd": round(dd * 100, 1) if dd is not None else None, "active": dd is not None and dd <= CRASH_DD,
             "peak": ds[pk] if pk is not None else None,
             "n": len(rows), "codes": [x["c"] for x in rows[:10]], "all": [x["c"] for x in rows],
             "rows": [{"c": x["c"], "sc": x["m"]["crash_sc"], "zf": x["m"].get("fpe_zf"), "qf": x["m"].get("qf"),
                       "cagr3": x["m"].get("cagr3"), "beta": x["m"]["crash_beta"], "cap": round((x["m"].get("cap") or 0) / 1e8),
                       "up": x["m"].get("rev_up_n")}
-                     for x in rows[:10]]}
+                     for x in rows[:10]],
+            "trio": {"active": below, "p50": round(e50[-1], 2), "ma120": round(ma120, 2) if ma120 else None,
+                     "gap": round((e50[-1] / ma120 - 1) * 100, 1) if ma120 else None,
+                     "n": len(tpool), "codes": [x["c"] for x in tpool[:3]], "all": [x["c"] for x in tpool]}}
 
 
 def _shift(k, n):

@@ -1,0 +1,37 @@
+name: winrate
+
+# 勝率專題：單檔贏 0050 的機率、上車／下車方式、三檔組合在不同市場狀態的勝率（scripts/research_winrate.py）
+# 改腳本 push 就自動跑；每月 15 日也重跑一次（資料累積後重新驗證三檔組合）
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [scripts/research_winrate.py]
+  schedule:
+    - cron: "30 12 15 * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: winrate
+  cancel-in-progress: false
+
+jobs:
+  winrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python scripts/research_winrate.py
+      - name: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/research_winrate.json
+          git diff --cached --quiet || git commit -m "research winrate: $(TZ=Asia/Taipei date +%F)"
+          for i in 1 2 3; do git pull --rebase -X theirs && git push && break; sleep 10; done
