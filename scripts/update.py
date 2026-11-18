@@ -805,7 +805,7 @@ def update_consensus(cons: dict, names: dict):
         meta["backfilled"] = ymd(datetime.now(TW).date())
     cut = ymd(datetime.now(TW).date() - timedelta(days=800))
     for c in list(data):
-        data[c] = sorted(x for x in data[c] if x[0] >= cut)
+        data[c] = sorted((x for x in data[c] if x[0] >= cut), key=lambda x: x[0])   # 只依日期排（同日其他欄位可能是 None）
         if not data[c]:
             del data[c]
     probe["calls"]["consensus"] = {"new": got, "companies": len(data),
@@ -2026,8 +2026,13 @@ def main():
     save("news.json", news)
     log("== 法人共識 EPS（FactSet 調查新聞標題）")
     consensus = load("consensus.json", {})
-    update_consensus(consensus, names)
-    save("consensus.json", consensus)
+    try:                                  # 新功能出錯不能讓整個更新失敗
+        update_consensus(consensus, names)
+        save("consensus.json", consensus)
+    except Exception as e:
+        import traceback
+        probe["errors"].append("consensus: " + traceback.format_exc()[-400:])
+        log(f"  法人共識 EPS 失敗：{e}")
     log("== 集保大戶持股（每週）")
     update_tdcc(tdcc)
     save("tdcc.json", tdcc)
