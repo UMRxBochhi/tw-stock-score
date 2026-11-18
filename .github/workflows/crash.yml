@@ -1,0 +1,37 @@
+name: crash
+
+# 大跌專題：0050 距高點跌超過 15% 時用什麼條件挑股，之後 12 個月最容易贏 0050（scripts/research_crash.py）
+# 改腳本 push 就自動跑；每月 15 日也重跑一次（資料會累積，季損益補完後毛利率也會納入）
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [scripts/research_crash.py]
+  schedule:
+    - cron: "0 12 15 * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: crash
+  cancel-in-progress: false
+
+jobs:
+  crash:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python scripts/research_crash.py
+      - name: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/research_crash.json
+          git diff --cached --quiet || git commit -m "research crash: $(TZ=Asia/Taipei date +%F)"
+          for i in 1 2 3; do git pull --rebase -X theirs && git push && break; sleep 10; done

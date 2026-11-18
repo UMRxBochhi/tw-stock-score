@@ -1845,11 +1845,13 @@ def quarter_plan(stocks, prices, last, fund):
                      for h in st["hist"]]}
 
 
-# ---------------------------------------------------------------- 大跌加碼名單（2018~2026 六次大跌回測）
-# 0050 距一年高點跌超過 15% 時啟用；候選：營收預估上修中、前瞻本益比 < −0.5σ（和自己的前瞻本益比歷史比）、市值 ≥ 100 億；
-# 依外資持股 40%＋近 3 年營收成長 40%＋市值 20% 排序取前 10。回測持有 12 個月：6 次大跌組合都贏 0050，單檔約 6 成贏。
-CRASH_DD, CRASH_QF, CRASH_CAGR = -0.15, 20.0, 0.10
-TECH_KW = ("半導體", "電子", "電腦", "通信", "光電", "資訊")
+# ---------------------------------------------------------------- 大跌加碼名單（scripts/research_crash.py：2018~2026 五次大跌）
+# 0050 距一年高點跌超過 15% 時啟用；候選：營收預估上修中、市值 ≥ 100 億；
+# 依外資持股 30%＋近 3 年營收成長 30%＋大跌前一年 beta 40% 排序取前 10。
+# 回測持有 12 個月：能算 beta 的 4 次大跌都贏 0050（最差一次 +12.5%）；舊版（前瞻本益比 < −0.5σ 篩選）只有 3/5。
+# 大跌期間抗跌的、本益比便宜的、低 beta 的，之後反而落後 → 前瞻本益比位階只顯示、不篩選。
+CRASH_DD = -0.15
+CRASH_W = {"qf": 0.3, "cagr3": 0.3, "beta": 0.4}
 
 
 def _roc_prev(ym: str) -> str:
@@ -1862,25 +1864,45 @@ def _roc_prev(ym: str) -> str:
 
 def crash_plan(stocks, prices, last, pe_monthly, fund):
     import math as _m
-    # 0050 距一年高點
-    closes = []
+    # 近兩年日線：一年高點用來算跌幅；高點之前一年用來算 beta
     d0 = datetime.strptime(last, "%Y%m%d")
-    yms = sorted({(d0 - timedelta(days=30 * i)).strftime("%Y%m") for i in range(13)})
+    yms = sorted({(d0 - timedelta(days=30 * i)).strftime("%Y%m") for i in range(26)})
     seen = {}
     if (DATA / "hist").exists():
         for ym in yms:
             seen.update(hist_read("px", ym))
     seen.update(prices)
+    ds = sorted(seen)
+    e50 = [(seen[d].get("0050") or [None])[0] for d in ds]
+    for i in range(1, len(e50)):                 # 缺值往前補
+        if not e50[i]:
+            e50[i] = e50[i - 1]
+    for i in range(1, len(e50)):                 # 分割（1 拆 N）時把之前的價格換算
+        if e50[i - 1] and e50[i] and e50[i] / e50[i - 1] < 0.5:
+            k = e50[i - 1] / e50[i]
+            e50[:i] = [x / k if x else x for x in e50[:i]]
     cut = (d0 - timedelta(days=365)).strftime("%Y%m%d")
-    for d in sorted(seen):
-        v = (seen[d].get("0050") or [None])[0]
-        if d >= cut and v:
-            closes.append(v)
-    for i in range(1, len(closes)):              # 分割（1 拆 N）時把之前的價格換算
-        if closes[i - 1] and closes[i] / closes[i - 1] < 0.5:
-            k = closes[i - 1] / closes[i]
-            closes[:i] = [x / k for x in closes[:i]]
-    dd = closes[-1] / max(closes) - 1 if closes else None
+    win = [i for i, d in enumerate(ds) if d >= cut and e50[i]]
+    dd, pk = None, None
+    if win:
+        pk = max(win, key=lambda i: e50[i])
+        dd = e50[win[-1]] / e50[pk] - 1
+
+    def beta_of(c):
+        """高點之前 250 個交易日，個股對 0050 的 beta（單日 ±15% 視為分割／減資，略過）"""
+        if pk is None:
+            return None
+        ra, rm = [], []
+        for i in range(max(1, pk - 249), pk + 1):
+            a0, a1 = (seen[ds[i - 1]].get(c) or [None])[0], (seen[ds[i]].get(c) or [None])[0]
+            if a0 and a1 and e50[i - 1] and e50[i] and 0.85 <= a1 / a0 <= 1.15:
+                ra.append(a1 / a0 - 1)
+                rm.append(e50[i] / e50[i - 1] - 1)
+        if len(ra) < 120:
+            return None
+        ma, mm = sum(ra) / len(ra), sum(rm) / len(rm)
+        vm = sum((y - mm) ** 2 for y in rm)
+        return sum((x - ma) * (y - mm) for x, y in zip(ra, rm)) / vm if vm else None
 
     revh = {}
     p = DATA / "hist" / "rev.json"
@@ -1894,26 +1916,13 @@ def crash_plan(stocks, prices, last, pe_monthly, fund):
         e = est12(h, rk)
         return e / sum(cur) if e and None not in cur and sum(cur) > 0 else None
 
-    pkeys = sorted(pe_monthly)[-60:]
-    rows = []
-    for x in stocks:
-        m, c = x["m"], x["c"]
-        if (m.get("cap") or 0) < MIN_CAP or (m.get("rev_up_n") or 0) < 1 or not m.get("pe") or m["pe"] <= 0:
-            continue
-        h = revh.get(c, {})
-        if not h:
-            continue
-        rk = max(h)
-        cur12 = [h.get(_shift(rk, i), [None])[0] for i in range(12)]
-        old12 = [h.get(_shift(rk, i + 36), [None])[0] for i in range(12)]
-        if None in cur12 + old12 or sum(old12) <= 0:
-            continue
-        cagr3 = (sum(cur12) / sum(old12)) ** (1 / 3) - 1
-        if cagr3 <= -1:
-            continue
+    def fwd_z(c, m, h, rk):
+        """前瞻本益比位階 σ（只顯示，不篩選）"""
+        if not m.get("pe") or m["pe"] <= 0:
+            return None
         fn = factor(h, rk)
         if not fn or fn <= 0:
-            continue
+            return None
         fh = []
         for k in pkeys:
             v = (pe_monthly[k].get(c) or [None])[0]
@@ -1921,30 +1930,51 @@ def crash_plan(stocks, prices, last, pe_monthly, fund):
             if f and f > 0:
                 fh.append(_m.log(v / f))
         if len(fh) < 24:
-            continue
+            return None
         mu = sum(fh) / len(fh)
         sd = (sum((a - mu) ** 2 for a in fh) / len(fh)) ** 0.5
-        if sd <= 0:
+        return round((_m.log(m["pe"] / fn) - mu) / sd, 2) if sd > 0 else None
+
+    pkeys = sorted(pe_monthly)[-60:]
+    rows = []
+    for x in stocks:
+        m, c = x["m"], x["c"]
+        if (m.get("cap") or 0) < MIN_CAP or (m.get("rev_up_n") or 0) < 1:
             continue
-        zf = (_m.log(m["pe"] / fn) - mu) / sd
-        m["fpe_zf"] = round(zf, 2)
-        m["cagr3"] = round(cagr3 * 100, 1)
-        if zf < -0.5:
-            rows.append(x)
-    # 排序：外資持股 40%＋近 3 年營收成長 40%＋市值 20%（池內百分位）。回測 6 次大跌取前 10：組合都贏 0050；
-    # 只看單一指標或加入「更便宜」都比較差
+        h = revh.get(c, {})
+        cagr3 = None
+        if h:
+            rk = max(h)
+            cur12 = [h.get(_shift(rk, i), [None])[0] for i in range(12)]
+            old12 = [h.get(_shift(rk, i + 36), [None])[0] for i in range(12)]
+            if None not in cur12 + old12 and sum(old12) > 0 and sum(cur12) > 0:
+                cagr3 = (sum(cur12) / sum(old12)) ** (1 / 3) - 1
+            m["fpe_zf"] = fwd_z(c, m, h, rk)
+        if cagr3 is not None:
+            m["cagr3"] = round(cagr3 * 100, 1)
+        bt = beta_of(c)
+        m["crash_beta"] = round(bt, 2) if bt is not None else None
+        rows.append(x)
+    # 排序：外資持股 30%＋近 3 年營收成長 30%＋beta 40%（候選內百分位；缺資料的項目不計，至少要有一半權重）
+    keymap = {"qf": "qf", "cagr3": "cagr3", "beta": "crash_beta"}
+
     def pr(k):
-        v = sorted(x["m"].get(k) or 0 for x in rows)
-        return {x["c"]: sum(1 for a in v if a < (x["m"].get(k) or 0)) / len(v) for x in rows}
-    if rows:
-        rq, rg, rc = pr("qf"), pr("cagr3"), pr("cap")
-        for x in rows:
-            x["m"]["crash_sc"] = round((0.4 * rq[x["c"]] + 0.4 * rg[x["c"]] + 0.2 * rc[x["c"]]) * 100)
+        v = sorted(x["m"][k] for x in rows if x["m"].get(k) is not None)
+        return {x["c"]: sum(1 for a in v if a < x["m"][k]) / max(1, len(v) - 1)
+                for x in rows if x["m"].get(k) is not None}
+    rk_ = {w: pr(keymap[w]) for w in CRASH_W}
+    for x in rows:
+        parts = [(rk_[w][x["c"]], wt) for w, wt in CRASH_W.items() if x["c"] in rk_[w]]
+        tw = sum(wt for _, wt in parts)
+        x["m"]["crash_sc"] = round(sum(v * wt for v, wt in parts) / tw * 100) if tw >= 0.5 else None
+    rows = [x for x in rows if x["m"]["crash_sc"] is not None]
     rows.sort(key=lambda x: -x["m"]["crash_sc"])
     return {"dd": round(dd * 100, 1) if dd is not None else None, "active": dd is not None and dd <= CRASH_DD,
+            "peak": ds[pk] if pk is not None else None,
             "n": len(rows), "codes": [x["c"] for x in rows[:10]], "all": [x["c"] for x in rows],
-            "rows": [{"c": x["c"], "sc": x["m"]["crash_sc"], "zf": x["m"]["fpe_zf"], "qf": x["m"].get("qf"),
-                      "cagr3": x["m"]["cagr3"], "cap": round((x["m"].get("cap") or 0) / 1e8), "up": x["m"].get("rev_up_n")}
+            "rows": [{"c": x["c"], "sc": x["m"]["crash_sc"], "zf": x["m"].get("fpe_zf"), "qf": x["m"].get("qf"),
+                      "cagr3": x["m"].get("cagr3"), "beta": x["m"]["crash_beta"], "cap": round((x["m"].get("cap") or 0) / 1e8),
+                      "up": x["m"].get("rev_up_n")}
                      for x in rows[:10]]}
 
 
