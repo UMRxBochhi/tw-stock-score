@@ -819,11 +819,11 @@ def consensus_metrics(lst: list, today: str):
     cut = ymd(datetime.strptime(today, "%Y%m%d").date() - timedelta(days=90))
     rec = [x for x in lst if x[0] >= cut]
     eps = [x for x in lst if x[1] is not None]
+    old = [x for x in eps if x[0] <= cut] or eps[:1]
     out = {"cons_up": sum(1 for x in rec if x[2] == "up") or None, "cons_dn": sum(1 for x in rec if x[2] == "down") or None}
     if eps:
         out["cons_eps"], out["cons_d"] = eps[-1][1], eps[-1][0]
-        old = [x for x in eps if x[0] <= cut] or eps
-        if old[-1][1] and old[-1][1] > 0 and eps[-1][0] != old[-1][0]:
+        if old and old[-1][1] and old[-1][1] > 0 and eps[-1][0] != old[-1][0]:
             out["cons_chg"] = round((eps[-1][1] / old[-1][1] - 1) * 100, 1)   # 近 90 天共識 EPS 變化 %
     tps = [x for x in lst if x[3]]
     if tps:
@@ -1689,9 +1689,12 @@ def sync_hist(prices, t86):
 # 條件（Q_RULE 2）：市值 ≥ 100 億、營收預估上修中、外資持股 ≥ 20%、近 3 年營收年複合成長 ≥ 10%；依基本面分數排序，每產業最多 2 檔、最多 20 檔
 # 研究 3：三種換股起始月年化 26.9~28.6%（0050 22.1%），2018~23、2023~26 都贏；舊條件（上修 ≥ 3＋創新高）有一種起始月輸
 # 每季（3、6、9、12 月 11 日後）換一次；每檔 5%，其餘放 0050；名單與當時價格記在 data/quarter.json，之後可對帳
-Q_MONTHS = (3, 6, 9, 12)
-Q_MAX, Q_PER_IND, Q_PER_W = 20, 2, 0.05
-Q_RULE, Q_QF, Q_CAGR = 3, 20.0, 10.0
+Q_MONTHS = tuple(range(1, 13))      # 每月 11 日後（新營收公布）檢查一次
+Q_MAX, Q_PER_IND, Q_PER_W = 10, 10, 0.10
+Q_RULE, Q_QF, Q_CAGR = 4, 30.0, 10.0
+# Q_RULE 4（研究 3 網格 42 組：外資門檻 20/30/40 × 每季/每月檢查 × 回落停損 不設~50%）：
+# 外資 ≥ 30% 在各種停損設定下都穩定（年化 30~37%、最大回撤約 −40%，比 20% 的 −46~−54% 小）；40% 股票太少反而差。
+# 每月檢查「不符合就換」在 30% 門檻下最好（35.6~36.9%）；停損幾 % 差異很小（用前段挑的最佳參數在後段只排 24/42 → 不要細調）。
 Q_STOP = 0.30     # 從買進後最高點回落 30% 就提前下車
 # Q_RULE 3（研究 3 下車訊號）：換股日只換掉不再符合條件的股票，還符合的續抱；期間內從高點回落 30% 提前下車。
 # 同基準回測（10 檔全押個股）：每季重挑 34.0%、不符合才換 34.4%、不符合才換＋回落 30% 停損 36.7%（0050 22.1%），

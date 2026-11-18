@@ -232,7 +232,7 @@ function renderMarket() {
   if (g.length) cards.push(`<div class="card"><div class="lbl">① 最強族群</div>${g.map((x) =>
     `<div class="mini"><a href="#" data-gotab="trend">${esc(x.seg)}</a><b>${x.seg_score?.toFixed(0) ?? "—"}</b></div>`).join("")}</div>`);
   const q = state.data.step2 || {};
-  if (q.codes) cards.push(`<div class="card"><div class="lbl">② 本季名單</div><div class="val">${q.codes.length} 檔・${esc(q.level_now || "")}</div>
+  if (q.codes) cards.push(`<div class="card"><div class="lbl">② 選股名單</div><div class="val">${q.codes.length} 檔・${esc(q.level_now || "")}</div>
     <div class="note">建議個股 ${q.stock_w}%、其餘 0050；下次換股 ${q.next}　<a href="#" data-gotab="step2">看名單 →</a></div></div>`);
   const k = state.data.crash;
   if (k?.active) cards.push(`<div class="card"><div class="lbl">大跌加碼名單</div><div class="val">已啟用・${k.n} 檔</div>
@@ -240,7 +240,7 @@ function renderMarket() {
   $("#market").innerHTML = cards.join("");
 }
 
-// ---------- 第二步：本季名單
+// ---------- 第二步：選股名單
 function renderStep2Info() {
   const q = state.data.step2 || {};
   const nm = (c) => { const x = state.data.stocks.find((s) => s.c === c); return `<a href="#${c}" data-open="${c}">${c} ${esc(x?.n || "")}</a>`; };
@@ -248,23 +248,23 @@ function renderStep2Info() {
   const lvCls = { "有利": "good", "普通": "neutral", "不利": "warn" };
   const hist = (q.hist || []).slice().reverse();
   $("#ruleInfo").innerHTML = `<div class="rulebox">
-    <b>② 本季名單</b>　<span class="note">${q.key || ""} 起（${q.start ? md(q.start) : ""} 收盤價），下次換股 ${q.next || "—"} 之後</span>
+    <b>② 選股名單</b>　<span class="note">${q.key || ""} 起（${q.start ? md(q.start) : ""} 收盤價），下次換股 ${q.next || "—"} 之後</span>
     <ol class="sop">
-      <li><b>條件</b>：市值 ≥ 100 億、營收預估上修中、外資持股 ≥ 20%、近 3 年營收年成長 ≥ 10%（長期成長＋法人認可）；依基本面分數排序，每個產業最多 2 檔，最多 20 檔。</li>
+      <li><b>條件</b>：市值 ≥ 100 億、營收預估上修中、外資持股 ≥ 30%、近 3 年營收年成長 ≥ 10%（長期成長＋法人認可）；依基本面分數排序，最多 10 檔。</li>
       <li><b>比例</b>：<span class="chip ${lvCls[q.level_now] || "neutral"}">現在：${esc(q.level_now || "—")}</span>
         建議個股合計 <b>${q.stock_w ?? "—"}%</b>（每檔約 ${q.per_w ?? "—"}%），其餘放 0050。
         ${(q.fav || []).map((t) => `<span class="chip good">${esc(t)}</span>`).join(" ")} ${(q.unfav || []).map((t) => `<span class="chip warn">${esc(t)}</span>`).join(" ")}</li>
-      <li><b>持有與下車</b>：換股日只換掉<b>不再符合條件</b>的股票，還符合的續抱（好股票可以一直抱）；期間內只有<b>從買進後最高點回落 30%</b> 才提前下車。
+      <li><b>持有與下車</b>：每月 11 日後（新營收公布）檢查一次，只換掉<b>不再符合條件</b>的股票，還符合的續抱（好股票可以一直抱）；另外<b>從買進後最高點回落 30%</b> 就提前下車。
         不設「賺多少就走」（回測：賺 50% 就走年化只剩 23%，永遠不賣只有 19%、一半的下車是虧超過 30%）。</li>
       <li><b>本益比位階、技術面、籌碼面</b>只當參考：同樣要買時，可優先買位階不貴、沒有漲多的。</li>
     </ol>
-    <p class="note">本季至今：名單平均 <b>${pct(q.ret)}</b>，0050 <b>${pct(q.ret0050)}</b>（不含股利）。
+    <p class="note">本期至今：名單平均 <b>${pct(q.ret)}</b>，0050 <b>${pct(q.ret0050)}</b>（不含股利）。
       ${q.added?.length && hist.length ? `新進：${q.added.map(nm).join("、")}。` : ""}${q.removed?.length ? `剔除：${q.removed.map(nm).join("、")}。` : ""}</p>
     ${hist.length ? `<table class="kv"><tr><td>期間</td><td>檔數</td><td>名單</td><td>0050</td></tr>${hist.map((h) =>
       `<tr><td>${md(h.start)}~${md(h.end)}</td><td>${h.n}</td><td>${pct(h.ret)}</td><td>${pct(h.ret0050)}</td></tr>`).join("")}</table>` : ""}
     ${crashHtml()}
-    <p class="note">回測（2018~2026，已扣交易成本）：10 檔全押個股、照上面的持有與下車規則，年化 36.7%（2018~23 18.5%、2023~26 68.7%），0050 22.1%；但最大回撤 −46%。
-      每檔 5%、其餘放 0050 的版本年化約 27~28%、最大回撤約 −28%。每個月贏 0050 的比例約 5 成，要整季、整組看，不要看單月單檔。
+    <p class="note">回測（2018~2026，已扣交易成本，10 檔全押個股）：年化約 36%（2018~23 約 18%、2023~26 約 69%），0050 22.1%；最大回撤約 −40%。
+      42 種參數組合（外資門檻、檢查頻率、停損幅度）裡 41 種贏 0050，所以不是靠剛好挑到某組參數；但每個月贏 0050 的比例只有約 5 成，要整組、拉長看。
       有利／不利的判斷樣本少，可能是巧合，從這一季開始實際記錄驗證。不是投資建議。</p></div>`;
 }
 
@@ -291,7 +291,7 @@ function holdAdvice(s) {
   if ((k.codes || []).includes(s.c)) { act = k.active ? "大跌名單：分批買、持有 12 個月" : "在大跌名單（未啟用）"; cls = k.active ? "good" : "neutral"; }
   if ((q.codes || []).includes(s.c)) {
     if (q.stopped?.[s.c]) { act = "從高點回落 30%：下車"; cls = "warn"; }
-    else if ((q.live || []).includes(s.c)) { act = `本季名單：續抱（距買進後高點 ${q.dd?.[s.c] ?? "—"}%）`; cls = "good"; }
+    else if ((q.live || []).includes(s.c)) { act = `選股名單：續抱（距買進後高點 ${q.dd?.[s.c] ?? "—"}%）`; cls = "good"; }
     else { act = `已不符合條件：${q.next || "下次換股"} 換掉`; cls = "warn"; }
   } else if ((q.live || []).includes(s.c)) { act = "符合條件，下次換股可能入選"; cls = "good"; }
   if (m.rev_up_n === 0) out.push(["warn", "營收預估本月下修"]);
@@ -306,8 +306,8 @@ function holdAdvice(s) {
 }
 function renderStep3() {
   const list = state.data.stocks.filter((s) => state.watch.has(s.c));
-  if (!list.length) { $("#watchInfo").innerHTML = '<div class="rulebox"><b>③ 持股監控</b><p class="note">還沒有持股。在任何清單點 ☆ 加入，這裡會每天檢查它還在不在本季名單、大跌名單。</p></div>'; return; }
-  $("#watchInfo").innerHTML = `<div class="rulebox"><b>③ 持股監控</b>　<span class="note">每天收盤後更新；本季名單符合條件就續抱、回落 30% 下車；大跌名單持有 12 個月</span>
+  if (!list.length) { $("#watchInfo").innerHTML = '<div class="rulebox"><b>③ 持股監控</b><p class="note">還沒有持股。在任何清單點 ☆ 加入，這裡會每天檢查它還在不在選股名單、大跌名單。</p></div>'; return; }
+  $("#watchInfo").innerHTML = `<div class="rulebox"><b>③ 持股監控</b>　<span class="note">每天收盤後更新；選股名單符合條件就續抱、回落 30% 下車；大跌名單持有 12 個月</span>
     <table class="kv" style="margin-top:8px"><tr><td>股票</td><td>建議</td><td>訊號</td></tr>
     ${list.map((s) => { const a = holdAdvice(s); return `<tr><td><a href="#${s.c}" data-open="${s.c}">${s.c} ${esc(s.n)}</a></td>
       <td><span class="chip ${a.cls}">${a.act}</span></td><td>${a.out.map(([c, t]) => `<span class="chip ${c}">${t}</span>`).join(" ") || NA}</td></tr>`; }).join("")}
@@ -442,7 +442,7 @@ function renderHow() {
     <h3>這個網站的用法：三步驟</h3>
     <p><b>① 趨勢族群</b>：先看族群分數，只往下看前段族群。族群分數 = 族群內公司的近 3 月營收年增中位數 30%、營收創 12 個月新高的比例 25%、營收動能 20%、營收預估連續上修 ≥ 2 個月的比例 25%（族群之間排名）。
        「產業族群」用證交所產業分類；AI 等趨勢用人工整理的產業鏈環節（data/themes.json，可自行修改）。</p>
-    <p><b>② 本季名單</b>：市值 ≥ 100 億、營收預估上修中、外資持股 ≥ 20%、近 3 年營收年成長 ≥ 10%，每產業最多 2 檔、最多 20 檔；每季換一次，其餘資金放 0050。族群分數只當趨勢參考，不用來篩選（回測篩族群會錯過台積電等大型股）。</p>
+    <p><b>② 選股名單</b>：市值 ≥ 100 億、營收預估上修中、外資持股 ≥ 30%、近 3 年營收年成長 ≥ 10%，最多 10 檔；每月 11 日後檢查，不符合才換、從買進後高點回落 30% 提前下車，其餘資金放 0050。族群分數只當趨勢參考，不用來篩選（回測篩族群會錯過台積電等大型股）。</p>
     <p><b>大跌加碼名單</b>：0050 距一年高點跌超過 15% 時啟用。候選是營收上修中、前瞻本益比 &lt; −0.5σ 的大型股，依外資持股 40%＋3 年營收成長 40%＋市值 20% 排序取前 10，分批買、持有 12 個月。</p>
     <p><b>③ 持股監控</b>：☆ 加入的股票每天檢查還在不在名單、有沒有從高點回落 30%。不設「賺多少就走」（回測較差）。</p>
     <h3>分數</h3>
@@ -535,7 +535,7 @@ async function showDetail(code) {
     <table class="kv steps">
       <tr><td>① 族群</td><td>${grpLine(s)}</td></tr>
       <tr><td>① 營收預估</td><td>${upTag(m)} ${m.rev_rev3 != null ? `近 3 個月 ${signed(m.rev_rev3, 1)}` : ""}${m.rev_hi != null && m.rev_hi >= 0 ? ' <span class="chip good">月營收創 12 月新高</span>' : ""}</td></tr>
-      <tr><td>② 名單</td><td>${(state.data.step2?.live || []).includes(s.c) ? '<span class="chip good">符合本季名單條件</span>' : '<span class="chip neutral">不符合本季名單條件</span>'}
+      <tr><td>② 名單</td><td>${(state.data.step2?.live || []).includes(s.c) ? '<span class="chip good">符合選股名單條件</span>' : '<span class="chip neutral">不符合選股名單條件</span>'}
         ${(state.data.crash?.codes || []).includes(s.c) ? ` <span class="chip ${state.data.crash.active ? "good" : "neutral"}">大跌名單${state.data.crash.active ? "（已啟用）" : ""}</span>` : ""}
         <span class="note">外資持股 ${m.qf ?? "—"}%・3 年營收年成長 ${m.cagr3 ?? "—"}%</span></td></tr>
       <tr><td>位階</td><td>${zoneTag(m)} ${m.fpe_zf != null ? `<span class="note">前瞻 ${m.fpe_zf}σ</span>` : ""} <span class="note">（參考；平常時期不是好買點訊號）</span></td></tr>
