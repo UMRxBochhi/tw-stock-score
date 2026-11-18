@@ -287,13 +287,23 @@ function crashHtml() {
 function holdAdvice(s) {
   const m = s.m, out = [];
   const q = state.data.step2 || {}, k = state.data.crash || {};
-  let act = "照自己的計畫", cls = "neutral";
-  if ((k.codes || []).includes(s.c)) { act = k.active ? "大跌名單：分批買、持有 12 個月" : "在大跌名單（未啟用）"; cls = k.active ? "good" : "neutral"; }
+  // 兩份名單分開寫，不互相覆蓋
+  const acts = [];
+  const ki = (k.codes || []).indexOf(s.c);
+  if (ki >= 0) acts.push([k.active ? "good" : "neutral",
+    `大跌加碼名單第 ${ki + 1} 名${k.active ? "（已啟用）：分批買、持有 12 個月" : "（未啟用）"}`]);
+  const qi = (q.live || []).indexOf(s.c), qn = (q.live || []).length;
   if ((q.codes || []).includes(s.c)) {
-    if (q.stopped?.[s.c]) { act = "從高點回落 30%：下車"; cls = "warn"; }
-    else if ((q.live || []).includes(s.c)) { act = `選股名單：續抱（距買進後高點 ${q.dd?.[s.c] ?? "—"}%）`; cls = "good"; }
-    else { act = `已不符合條件：${q.next || "下次換股"} 換掉`; cls = "warn"; }
-  } else if ((q.live || []).includes(s.c)) { act = "符合條件，下次換股可能入選"; cls = "good"; }
+    if (q.stopped?.[s.c]) acts.push(["warn", "選股名單：從買進後高點回落 30%，下車"]);
+    else if (qi >= 0) acts.push(["good", `選股名單：在名單內，續抱（距買進後高點 ${q.dd?.[s.c] ?? "—"}%）`]);
+    else acts.push(["warn", `選股名單：已不符合條件，${q.next || "下次檢查"} 換掉`]);
+  } else if (qi >= 0) {
+    acts.push(["neutral", `選股名單：符合條件，排第 ${qi + 1} / ${qn} 名（只取前 10）；已持有可續抱`]);
+  } else if (m.cap >= 1e10) {
+    acts.push(["neutral", "選股名單：目前不符合條件"]);
+  }
+  const act = acts.map((a) => a[1]).join("；") || "照自己的計畫";
+  const cls = acts.some((a) => a[0] === "warn") ? "warn" : acts.some((a) => a[0] === "good") ? "good" : "neutral";
   if (m.rev_up_n === 0) out.push(["warn", "營收預估本月下修"]);
   if (m.rev_up_n >= 1) out.push(["good", `營收預估上修中（${m.rev_up_n} 個月）`]);
   if (m.cons_up) out.push(["good", `法人 EPS 上修 ${m.cons_up} 次（90 天）`]);
