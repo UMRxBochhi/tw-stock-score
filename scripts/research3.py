@@ -394,6 +394,8 @@ def main():
                 "最大回撤": round(dd * 100, 1), "平均每月換手": round(sum(x[3] for x in rows[1:]) / max(1, len(rows) - 1) * 100, 1)}
             u.log(f"{vname} 前{N}: " + json.dumps(out["portfolios"][f"{vname}｜前 {N} 名"], ensure_ascii=False)[:400])
     # ---- 賣出／停利規則：持有到規則觸發才賣，空出的位置補當月基本面最高分、還沒持有的股票
+    _sc_cache = {}
+
     def exit_test(N, rule, entry=None):
         slots = []          # 每檔：{"c", "v" 市值占比, "g" 進場後累積報酬倍數, "pk" 最高倍數, "mo" 持有月數}
         eq = em = pk_eq = 1.0
@@ -408,7 +410,9 @@ def main():
             mk = snap.get("__mkt")
             if not mk:
                 continue
-            sc = user_score(snap, FUND, None, None)
+            if idx not in _sc_cache:
+                _sc_cache[idx] = user_score(snap, FUND, None, None)
+            sc = _sc_cache[idx]
             ranked = [c for c in sorted(sc, key=lambda c: -sc[c]) if snap[c].get("hold") is not None
                       and (entry is None or entry(snap[c]))]
             rpos = {c: i for i, c in enumerate(ranked)}
@@ -908,6 +912,27 @@ def main():
                                              "高組勝出比例": round(sum(x > 0 for x in spread) / len(spread) * 100)}
     out["qf_long"] = qlong
     u.log("外資持股長期變化: " + json.dumps(qlong, ensure_ascii=False))
+    # ---- 網格：外資門檻 × 基本面檢查頻率 × 高點回落停損；用 2018~2023 挑最好的，看 2023~2026 是否仍有效
+    grid = []
+    for qv in (20, 30, 40):
+        en = (lambda q: (lambda m: (m.get("rev_up_n") or 0) >= 1 and (m.get("qf") or 0) >= q
+                         and m.get("cagr3") is not None and m["cagr3"] >= 0.10))(qv)
+        for chk in ("每季", "每月"):
+            for stop in (None, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50):
+                def rule(sl, m, rk, en=en, chk=chk, stop=stop):
+                    bad = (sl["mo"] % 3 == 0 if chk == "每季" else True) and not en(m)
+                    return bad or (stop is not None and sl["g"] / sl["pk"] <= 1 - stop)
+                r = exit_test(10, rule, entry=en)
+                grid.append({"外資門檻": qv, "基本面檢查": chk, "高點回落停損": f"{int(stop * 100)}%" if stop else "不設",
+                             "年化": r["年化"], "2018-2023": r["2018-2023 年化"], "2023-2026": r["2023-2026 年化"],
+                             "最大回撤": r["最大回撤"], "平均持有月數": r["平均持有月數"], "下車虧 > 30% 比例": r["下車時虧損 > 30% 的比例"],
+                             "最差一筆": r["最差一筆"], "每月贏 0050": r["每月贏 0050 比例"]})
+    best_train = max(grid, key=lambda x: x["2018-2023"] or -99)
+    rank_test = sorted(grid, key=lambda x: -(x["2023-2026"] or -99))
+    out["exit_grid"] = {"0050": {"年化": 22.1, "2018-2023": 9.8, "2023-2026": 42.8}, "全部": grid,
+                        "用 2018-2023 挑的最佳": best_train,
+                        "它在 2023-2026 的名次": f"{rank_test.index(best_train) + 1} / {len(grid)}"}
+    u.log("下車網格: " + json.dumps(out["exit_grid"], ensure_ascii=False)[:3000])
     out["persistence"] = persistence(records, reb, ind_of, e, di)
     u.save("research3.json", out)
 
