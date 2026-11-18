@@ -389,13 +389,14 @@ def main():
                 "最大回撤": round(dd * 100, 1), "平均每月換手": round(sum(x[3] for x in rows[1:]) / max(1, len(rows) - 1) * 100, 1)}
             u.log(f"{vname} 前{N}: " + json.dumps(out["portfolios"][f"{vname}｜前 {N} 名"], ensure_ascii=False)[:400])
     # ---- 賣出／停利規則：持有到規則觸發才賣，空出的位置補當月基本面最高分、還沒持有的股票
-    def exit_test(N, rule):
+    def exit_test(N, rule, entry=None):
         slots = []          # 每檔：{"c", "v" 市值占比, "g" 進場後累積報酬倍數, "pk" 最高倍數, "mo" 持有月數}
         eq = em = pk_eq = 1.0
         dd = 0.0
         seg = {"train": [1.0, 1.0, 0], "test": [1.0, 1.0, 0]}
         n_m = n_sell = 0
         hold_mo = []
+        exit_g = []
         wins = 0
         for idx in reb:
             t, snap = records[idx]
@@ -403,7 +404,8 @@ def main():
             if not mk:
                 continue
             sc = user_score(snap, FUND, None, None)
-            ranked = [c for c in sorted(sc, key=lambda c: -sc[c]) if snap[c].get("hold") is not None]
+            ranked = [c for c in sorted(sc, key=lambda c: -sc[c]) if snap[c].get("hold") is not None
+                      and (entry is None or entry(snap[c]))]
             rpos = {c: i for i, c in enumerate(ranked)}
             keep, cash = [], 0.0 if slots else 1.0
             for sl in slots:
@@ -412,6 +414,7 @@ def main():
                     cash += sl["v"]
                     n_sell += 1
                     hold_mo.append(sl["mo"])
+                    exit_g.append(sl["g"] - 1)
                     continue
                 keep.append(sl)
             held = {x["c"] for x in keep}
@@ -447,7 +450,11 @@ def main():
                 "2023-2026 年化": cg(seg["test"][0], seg["test"][2] / 12), "2023-2026 0050": cg(seg["test"][1], seg["test"][2] / 12),
                 "每月贏 0050 比例": round(wins / max(1, n_m) * 100, 1), "最大回撤": round(dd * 100, 1),
                 "平均持有月數": round(sum(hold_mo) / len(hold_mo), 1) if hold_mo else None,
-                "每月賣出檔數": round(n_sell / max(1, n_m), 2)}
+                "每月賣出檔數": round(n_sell / max(1, n_m), 2),
+                "下車時平均報酬": round(sum(exit_g) / len(exit_g) * 100, 1) if exit_g else None,
+                "下車時虧損 > 30% 的比例": round(sum(g < -0.3 for g in exit_g) / len(exit_g) * 100, 1) if exit_g else None,
+                "最差一筆": round(min(exit_g) * 100, 1) if exit_g else None,
+                "仍持有中的最差": round(min(x["g"] - 1 for x in slots) * 100, 1) if slots else None}
 
     down = lambda m: m.get("rev_up_n") == 0
     pe_hi = lambda m: m.get("val_cheap") is not None and -m["val_cheap"] > 93     # 本益比位階 > +1.5σ（約 93 百分位）
@@ -837,6 +844,26 @@ def main():
                                  "個股占比": avg("平均個股占比")}
         u.log(f"本季名單變化 {name}: " + json.dumps(out["quarter2"][name], ensure_ascii=False))
     u.log("穩健性: " + json.dumps(rob, ensure_ascii=False)[:2000])
+    # ---- 下車訊號：進場用網站本季名單條件，比較各種出場方式（含避開大虧的能力）
+    ent = lambda m: (m.get("rev_up_n") or 0) >= 1 and (m.get("qf") or 0) >= 20 and m.get("cagr3") is not None and m["cagr3"] >= 0.10
+    dd_ = lambda sl, k: sl["g"] / sl["pk"] <= 1 - k
+    EX2 = {
+        "每季檢查，不符合條件才下車": lambda sl, m, rk: sl["mo"] % 3 == 0 and not ent(m),
+        "每月檢查，不符合條件就下車": lambda sl, m, rk: not ent(m),
+        "從高點回落 20% 就下車": lambda sl, m, rk: dd_(sl, 0.20),
+        "從高點回落 30% 就下車": lambda sl, m, rk: dd_(sl, 0.30),
+        "賺 50% 就走": lambda sl, m, rk: sl["g"] >= 1.5,
+        "賺 50% 就走，或從高點回落 20%": lambda sl, m, rk: sl["g"] >= 1.5 or dd_(sl, 0.20),
+        "營收近 3 月年增轉負才下車": lambda sl, m, rk: m.get("rev3") is not None and m["rev3"] < 0,
+        "每季不符合條件，或從高點回落 20%": lambda sl, m, rk: (sl["mo"] % 3 == 0 and not ent(m)) or dd_(sl, 0.20),
+        "每季不符合條件，或從高點回落 30%": lambda sl, m, rk: (sl["mo"] % 3 == 0 and not ent(m)) or dd_(sl, 0.30),
+        "營收年增轉負，或從高點回落 30%": lambda sl, m, rk: (m.get("rev3") is not None and m["rev3"] < 0) or dd_(sl, 0.30),
+        "永遠不賣（看最壞情況）": lambda sl, m, rk: False,
+    }
+    out["exit2"] = {}
+    for name, rule in EX2.items():
+        out["exit2"][name] = res = exit_test(10, rule, entry=ent)
+        u.log(f"下車訊號 {name}: " + json.dumps(res, ensure_ascii=False))
     out["persistence"] = persistence(records, reb, ind_of, e, di)
     u.save("research3.json", out)
 
