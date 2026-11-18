@@ -173,6 +173,7 @@ def main():
         t, snap = records[idx]
         rk = b.avail_rev_key(t)
         prev_qf = records[idx - 4][1] if idx >= 4 else {}
+        prev_q = {w: (records[idx - w][1] if idx >= w else {}) for w in (13, 26, 52)}   # 約 3、6、12 個月前（每週一筆）
         pk = [k for k in pe_keys if k < t[:6]][-60:]
         md = [d for d in mg_dates if d <= t]
         mg = mgh[md[-1]] if md and (int(t) - int(md[-1])) < 100 else {}
@@ -225,6 +226,10 @@ def main():
             x = mg.get(c)
             if x and x[0] is not None and x[1]:
                 m["fin_use"] = x[0] / x[1]
+            for w, snap_w in prev_q.items():
+                qw = (snap_w.get(c) or {}).get("qf")
+                if m.get("qf") is not None and qw is not None:
+                    m[f"qd{w}"] = m["qf"] - qw
             q0 = (prev_qf.get(c) or {}).get("qf")
             if m.get("qf") is not None and q0 is not None:
                 m["qd4"] = m["qf"] - q0
@@ -864,6 +869,43 @@ def main():
     for name, rule in EX2.items():
         out["exit2"][name] = res = exit_test(10, rule, entry=ent)
         u.log(f"下車訊號 {name}: " + json.dumps(res, ensure_ascii=False))
+    # ---- 外資持股：當下比例 vs 不同期間的變化，對之後 1、3、12 個月報酬的預測力（市值 ≥ 100 億）
+    qlong = {}
+    for k, lab in (("qf", "當下持股比例"), ("qd4", "4 週變化"), ("qd13", "3 個月變化"), ("qd26", "6 個月變化"), ("qd52", "12 個月變化")):
+        qlong[lab] = {}
+        for H in (1, 3, 12):
+            ics, spread = [], []
+            for n, idx in enumerate(reb[:-H]):
+                t, snap = records[idx]
+                fut = [records[reb[n + j]][1] for j in range(H)]
+                f_, r_ = {}, {}
+                for c, m in snap.items():
+                    if c.startswith("__") or (m.get("cap") or 0) < MIN_CAP or m.get(k) is None:
+                        continue
+                    g = 1.0
+                    for f in fut:
+                        h = (f.get(c) or {}).get("hold")
+                        if h is None:
+                            g = None
+                            break
+                        g *= 1 + h
+                    if g is not None:
+                        f_[c], r_[c] = m[k], g - 1
+                if len(f_) < 30:
+                    continue
+                v = b.spearman(f_, r_)
+                if v is not None:
+                    ics.append(v)
+                cs = sorted(f_, key=lambda c: f_[c])
+                n3 = len(cs) // 3
+                spread.append(sum(r_[c] for c in cs[-n3:]) / n3 - sum(r_[c] for c in cs[:n3]) / n3)
+            if len(ics) >= 10:
+                tt = b.nw_t(ics, max(1, H - 1))
+                qlong[lab][f"之後 {H} 個月"] = {"IC": round(sum(ics) / len(ics) * 100, 2), "t": tt and round(tt, 2), "次數": len(ics),
+                                             "最高 1/3 減最低 1/3 報酬": round(sum(spread) / len(spread) * 100, 1),
+                                             "高組勝出比例": round(sum(x > 0 for x in spread) / len(spread) * 100)}
+    out["qf_long"] = qlong
+    u.log("外資持股長期變化: " + json.dumps(qlong, ensure_ascii=False))
     out["persistence"] = persistence(records, reb, ind_of, e, di)
     u.save("research3.json", out)
 
