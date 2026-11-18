@@ -105,7 +105,7 @@ def main():
         key = f"{y - 1911}Q{q}"
         if cnt.get(key, 0) >= 1200 and (y, q) not in recent:
             continue
-        if time.time() - t0 > 40 * 60:
+        if time.time() - t0 > 60 * 60:
             break
         n = 0
         for typek in ("sii", "otc"):
