@@ -38,6 +38,7 @@ const F = {
   cap: { t: "市值（億）", short: "市值(億)", g: (s) => s.m.cap != null ? s.m.cap / 1e8 : null, kind: "num0", grp: "價格" },
   qd4: { t: "外資持股 4 週變化（百分點）", short: "外資Δ", g: (s) => s.m.qd4, kind: "signed", suf: "", grp: "籌碼" },
   cagr3: { t: "近 3 年營收年複合成長（%）", short: "3年成長", g: (s) => s.m.cagr3, kind: "signed", suf: "%", grp: "營收" },
+  cons_chg: { t: "法人共識 EPS 近 90 天變化（FactSet 調查新聞）", short: "法人EPS", g: (s) => s.m.cons_chg, kind: "signed", suf: "%", grp: "營收" },
   rev_up_n: { t: "營收預估連續上修月數", short: "連續上修", g: (s) => s.m.rev_up_n, kind: "num0", grp: "營收" },
   rev_rev3: { t: "營收預估近 3 個月上修 %", short: "3月上修", g: (s) => s.m.rev_rev3, kind: "signed1", grp: "營收" },
   pe_z: { t: "本益比位階 σ（< −0.5 便宜、> +0.5 偏貴）", short: "位階σ", g: (s) => s.m.pe_z, kind: "signed", suf: "", grp: "價值" },
@@ -91,7 +92,7 @@ function cell(key, s) {
 }
 
 const TABCOLS = {
-  step2: ["p", "chg", "score", "rev_up_n", "qf", "cagr3", "rev_rev3", "pe_z", "cap"],
+  step2: ["p", "chg", "score", "rev_up_n", "cons_chg", "qf", "cagr3", "pe_z", "cap"],
   watch: ["p", "chg", "score", "rev_up_n", "rev_rev3", "pe_z", "b20", "b60", "qd4"],
   screen: ["p", "chg", "score", "f", "t", "c", "rev_up_n", "rev_rev3", "rev_hi", "pe_z", "opm", "qf", "cap"],
 };
@@ -295,6 +296,8 @@ function holdAdvice(s) {
   } else if ((q.live || []).includes(s.c)) { act = "符合條件，下次換股可能入選"; cls = "good"; }
   if (m.rev_up_n === 0) out.push(["warn", "營收預估本月下修"]);
   if (m.rev_up_n >= 1) out.push(["good", `營收預估上修中（${m.rev_up_n} 個月）`]);
+  if (m.cons_up) out.push(["good", `法人 EPS 上修 ${m.cons_up} 次（90 天）`]);
+  if (m.cons_dn) out.push(["warn", `法人 EPS 下修 ${m.cons_dn} 次（90 天）`]);
   if (m.qf != null) out.push([m.qf >= 20 ? "good" : "neutral", `外資持股 ${m.qf}%`]);
   if (m.cagr3 != null) out.push([m.cagr3 >= 10 ? "good" : "neutral", `3 年營收年成長 ${m.cagr3}%`]);
   if (m.news_up) out.push(["good", `法人上調 ${m.news_up} 則`]);
@@ -751,12 +754,17 @@ function drawEst(det, m) {
 }
 
 function drawNews(det) {
-  const n = det.news || [], c = det.confs || [];
-  if (!n.length && !c.length) { $("#newsBox").innerHTML = ""; return; }
-  $("#newsBox").innerHTML = `<h3>法說會與法人消息</h3><table class="kv">
+  const n = det.news || [], c = det.confs || [], k = det.cons || [];
+  if (!n.length && !c.length && !k.length) { $("#newsBox").innerHTML = ""; return; }
+  const dirTxt = { up: ["good", "上修"], down: ["warn", "下修"], flat: ["neutral", "持平"] };
+  $("#newsBox").innerHTML = `<h3>法說會與法人消息</h3>
+    ${k.length ? `<p class="note"><b>法人共識 EPS（FactSet 調查）</b></p><table class="kv"><tr><td>日期</td><td>EPS 預估</td><td>目標價</td></tr>${[...k].reverse().slice(0, 12).map((x) =>
+      `<tr><td>${ymdTxt(x[0])}</td><td>${x[2] ? `<span class="chip ${dirTxt[x[2]][0]}">${dirTxt[x[2]][1]}</span> ` : ""}${x[1] ?? "—"}${x[1] != null ? " 元" : ""}</td><td>${x[3] ?? "—"}${x[3] ? " 元" : ""}</td></tr>`).join("")}</table>` : ""}
+    <table class="kv">
     ${c.map((x) => `<tr><td>${ymdTxt(x[0])} 法說會</td><td>${esc(x[1])} ${x[2] ? `<a href="${esc(x[2])}" target="_blank" rel="noopener">簡報 →</a>` : ""}</td></tr>`).join("")}
     ${[...n].reverse().map((x) => `<tr><td>${ymdTxt(x[0])} <span class="chip ${x[1] === "up" ? "good" : "warn"}">${x[1] === "up" ? "上調" : "下調"}</span></td><td><a href="${esc(x[3])}" target="_blank" rel="noopener">${esc(x[2])}</a></td></tr>`).join("")}
-  </table><p class="note">新聞來自 Google 新聞標題自動比對（可能誤判）；法說會來自公開資訊觀測站。只當參考，不計分。</p>`;
+  </table><p class="note">法人共識 EPS 來自「FactSet 最新調查」新聞標題（鉅亨、券商發布）；其他新聞來自 Google 新聞標題比對（可能誤判）；法說會來自公開資訊觀測站。
+    共識 EPS 從現在開始累積，累積夠了會回測它是否比「營收推估上修」更準，驗證前只當參考、不計分。</p>`;
 }
 
 function drawRev(det) {

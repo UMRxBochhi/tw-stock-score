@@ -719,7 +719,11 @@ def update_news(news: dict, names: dict):
                     d = parsedate_to_datetime(pd.group(1)).astimezone(TW).strftime("%Y%m%d") if pd else ymd(datetime.now(TW).date())
                 except Exception:
                     d = ymd(datetime.now(TW).date())
-                hit = next((c for n, c in nm if n in title), None)
+                body = re.split(r"\s[-－]\s|｜", title)[0]
+                if re.search(r"-(US|HK|JP|CN|KR)\b", body):
+                    continue
+                mc = re.search(r"[\(（](\d{4,6}[A-Z]?)-TW[\)）]", body)
+                hit = mc.group(1) if mc and mc.group(1) in names else next((c for n, c in nm if n in body), None)
                 if not hit:
                     continue
                 lst = news.setdefault(hit, [])
@@ -732,6 +736,99 @@ def update_news(news: dict, names: dict):
         if not news[c]:
             del news[c]
     probe["calls"]["news"] = {"ok": got >= 0, "new": got, "companies": len(news)}
+
+
+# ---------------------------------------------------------------- 法人共識 EPS（FactSet 調查新聞標題）
+# 鉅亨、券商等每天發布「Factset 最新調查：技嘉(2376-TW)EPS預估上修至36.18元，預估目標價為496元」，
+# 用 Google 新聞 RSS 只抓標題 → 每家公司的共識 EPS 與目標價變化。第一次執行會用 after/before 補過去 24 個月（只能補到一部分）。
+CONS_Q = ["Factset 最新調查 EPS預估", "Factset 最新調查 目標價", "Factset EPS預估上修", "Factset EPS預估下修"]
+RE_EPS = re.compile(r"[\(（](\d{4,6}[A-Z]?)-TW[\)）][^，,。]*?EPS預估(上修|下修|持平|維持)?至?\s*(-?[\d.]+)\s*元")
+RE_TP = re.compile(r"[\(（](\d{4,6}[A-Z]?)-TW[\)）][^，,。]*?目標價(?:為|調升至|調降至|上修至|下修至)?\s*([\d.]+)\s*元")
+RE_TP2 = re.compile(r"預估目標價為\s*([\d.]+)\s*元")
+
+
+def _cons_fetch(q, cons, names):
+    from email.utils import parsedate_to_datetime
+    try:
+        time.sleep(1.2)
+        r = S.get("https://news.google.com/rss/search", params={"q": q, "hl": "zh-TW", "gl": "TW", "ceid": "TW:zh-Hant"}, timeout=30)
+        xml = r.content.decode("utf-8", errors="ignore")
+    except Exception as e:
+        probe["errors"].append(f"cons {q}: {e}"[:200])
+        return 0
+    got = 0
+    for it in re.findall(r"<item>(.*?)</item>", xml, flags=re.S):
+        t = re.search(r"<title>(.*?)</title>", it, flags=re.S)
+        pd = re.search(r"<pubDate>(.*?)</pubDate>", it, flags=re.S)
+        if not t:
+            continue
+        title = re.sub(r"<!\[CDATA\[|\]\]>", "", t.group(1)).replace("&amp;", "&").strip()
+        body = re.split(r"\s[-－]\s|｜", title)[0]
+        try:
+            d = parsedate_to_datetime(pd.group(1)).astimezone(TW).strftime("%Y%m%d") if pd else ymd(datetime.now(TW).date())
+        except Exception:
+            d = ymd(datetime.now(TW).date())
+        me = RE_EPS.search(body)
+        mt = RE_TP.search(body)
+        code = (me or mt).group(1) if (me or mt) else None
+        if not code or code not in names:
+            continue
+        eps = float(me.group(3)) if me else None
+        dr = {"上修": "up", "下修": "down"}.get(me.group(2), "flat") if me and me.group(2) else None
+        tp = None
+        m2 = RE_TP2.search(body)
+        if m2:
+            tp = float(m2.group(1))
+        elif mt:
+            tp = float(mt.group(2))
+        lst = cons.setdefault(code, [])
+        rec = [d, eps, dr, tp, body[:120]]
+        if not any(x[0] == d and x[1] == eps and x[3] == tp for x in lst):
+            lst.append(rec)
+            got += 1
+    return got
+
+
+def update_consensus(cons: dict, names: dict):
+    meta = cons.setdefault("_meta", {})
+    data = cons.setdefault("data", {})
+    got = 0
+    for q in CONS_Q:
+        got += _cons_fetch(f"{q} when:7d", data, names)
+    if not meta.get("backfilled"):
+        today = datetime.now(TW).date().replace(day=1)
+        for i in range(24, 0, -1):
+            a = (today - timedelta(days=31 * i)).replace(day=1)
+            b2 = (a + timedelta(days=32)).replace(day=1)
+            for q in CONS_Q[:2]:
+                got += _cons_fetch(f"{q} after:{a.isoformat()} before:{b2.isoformat()}", data, names)
+        meta["backfilled"] = ymd(datetime.now(TW).date())
+    cut = ymd(datetime.now(TW).date() - timedelta(days=800))
+    for c in list(data):
+        data[c] = sorted(x for x in data[c] if x[0] >= cut)
+        if not data[c]:
+            del data[c]
+    probe["calls"]["consensus"] = {"new": got, "companies": len(data),
+                                   "records": sum(len(v) for v in data.values())}
+
+
+def consensus_metrics(lst: list, today: str):
+    """近 90 天：共識 EPS 上修／下修次數、EPS 變化幅度；最新目標價"""
+    if not lst:
+        return {}
+    cut = ymd(datetime.strptime(today, "%Y%m%d").date() - timedelta(days=90))
+    rec = [x for x in lst if x[0] >= cut]
+    eps = [x for x in lst if x[1] is not None]
+    out = {"cons_up": sum(1 for x in rec if x[2] == "up") or None, "cons_dn": sum(1 for x in rec if x[2] == "down") or None}
+    if eps:
+        out["cons_eps"], out["cons_d"] = eps[-1][1], eps[-1][0]
+        old = [x for x in eps if x[0] <= cut] or eps
+        if old[-1][1] and old[-1][1] > 0 and eps[-1][0] != old[-1][0]:
+            out["cons_chg"] = round((eps[-1][1] / old[-1][1] - 1) * 100, 1)   # 近 90 天共識 EPS 變化 %
+    tps = [x for x in lst if x[3]]
+    if tps:
+        out["cons_tp"] = tps[-1][3]
+    return out
 
 
 def theme_stats(themes: dict, stocks: list, qf_latest):
@@ -1214,7 +1311,7 @@ def combine(ranks: dict, weights: dict, code: str):
 
 
 def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores, tdcc=None, qf_latest=None,
-                 news=None, confs=None, themes=None):
+                 news=None, confs=None, themes=None, consensus=None):
     pdates = sorted(prices)
     tdates = sorted(t86)
     if not pdates:
@@ -1358,6 +1455,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
         nw = (news or {}).get(code) or []
         cut30 = ymd(datetime.now(TW).date() - timedelta(days=30))
         m["news_up"] = sum(1 for x in nw if x[0] >= cut30 and x[1] == "up") or None
+        m.update({k: v for k, v in consensus_metrics(((consensus or {}).get("data") or {}).get(code, []), last).items() if v is not None})
         m["news_dn"] = sum(1 for x in nw if x[0] >= cut30 and x[1] == "down") or None
         cf = [x for x in ((confs or {}).get(code) or []) if x[0] >= ymd(datetime.now(TW).date())]
         if cf:
@@ -1538,6 +1636,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
         det["est"] = est_cache.get(code)
         det["news"] = (news or {}).get(code)
         det["confs"] = (confs or {}).get(code)
+        det["cons"] = ((consensus or {}).get("data") or {}).get(code)
         sd = [d for d in sdates if code in scores[d]]
         det["sc"] = {"d": sd, "score": [scores[d][code] for d in sd]}
         h = rev_hist.get(code, {})
@@ -1925,6 +2024,10 @@ def main():
     news = load("news.json", {})
     update_news(news, names)
     save("news.json", news)
+    log("== 法人共識 EPS（FactSet 調查新聞標題）")
+    consensus = load("consensus.json", {})
+    update_consensus(consensus, names)
+    save("consensus.json", consensus)
     log("== 集保大戶持股（每週）")
     update_tdcc(tdcc)
     save("tdcc.json", tdcc)
@@ -1951,7 +2054,7 @@ def main():
     save("fundamentals.json", fund)
 
     out = build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores, tdcc, qf_latest,
-                       news, confs, load("themes.json", {}))
+                       news, confs, load("themes.json", {}), consensus)
     save("index.json", index)
     save("scores.json", scores)
     save("fundamentals.json", fund)
