@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [scripts/research3.py]
+    paths: [scripts/research3.py, scripts/backfill_inc.py]
   workflow_run:
     workflows: [chips]
     types: [completed]
@@ -29,6 +29,9 @@ jobs:
           python-version: "3.12"
       - run: pip install requests
       - run: python scripts/research2.py
+      - name: 補每季損益表（毛利率）
+        run: python scripts/backfill_inc.py
+        if: always()
       - run: python scripts/research3.py
         if: always()
       - name: commit
@@ -37,5 +40,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/research.json data/research2.json data/research3.json
+          git add data/hist/inc.json.gz data/probe_inc.json 2>/dev/null || true
           git diff --cached --quiet || git commit -m "research: $(TZ=Asia/Taipei date +%F)"
           for i in 1 2 3; do git pull --rebase -X theirs && git push && break; sleep 10; done

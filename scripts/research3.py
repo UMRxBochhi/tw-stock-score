@@ -162,6 +162,40 @@ def main():
             _fc[key] = e12 / sum(cur) if e12 and None not in cur and sum(cur) > 0 else None
         return _fc[key]
 
+    # 每季損益（觀測站累計數 → 單季）：毛利率、營益率
+    import gzip
+    _incp = b.HIST / "inc.json.gz"
+    incdb = json.loads(gzip.decompress(_incp.read_bytes())) if _incp.exists() else {}
+    u.log(f"季損益公司數 {len(incdb)}")
+
+    def qkey_prev(k):
+        y, q = int(k[:-2]), int(k[-1])
+        return f"{y - 1}Q4" if q == 1 else f"{y}Q{q - 1}"
+
+    _qm = {}
+
+    def q_margin(c, k):
+        """單季（毛利率, 營益率）%"""
+        if (c, k) not in _qm:
+            h = incdb.get(c, {})
+            v = h.get(k)
+            res = None
+            if v and v[0]:
+                if k.endswith("Q1"):
+                    q = v
+                else:
+                    pv = h.get(qkey_prev(k))
+                    q = [a - b_ if a is not None and b_ is not None else None for a, b_ in zip(v, pv)] if pv else None
+                if q and q[0] and q[0] > 0:
+                    res = (q[1] / q[0] * 100 if q[1] is not None else None, q[2] / q[0] * 100 if q[2] is not None else None)
+            _qm[(c, k)] = res
+        return _qm[(c, k)]
+
+    def avail_q(t):
+        """t 這天一定已公布的最新一季（保守：公布期限後的下個月）"""
+        y, mo = int(t[:4]) - 1911, int(t[4:6])
+        return f"{y}Q3" if mo >= 12 else f"{y}Q2" if mo >= 9 else f"{y}Q1" if mo >= 6 else f"{y - 1}Q4" if mo >= 4 else f"{y - 1}Q3"
+
     def zlog(v, xs):
         lx = [math.log(x) for x in xs]
         mu = sum(lx) / len(lx)
@@ -233,6 +267,22 @@ def main():
             q0 = (prev_qf.get(c) or {}).get("qf")
             if m.get("qf") is not None and q0 is not None:
                 m["qd4"] = m["qf"] - q0
+        if incdb:
+            k0 = avail_q(t)
+            k1 = qkey_prev(k0)
+            k4 = f"{int(k0[:-2]) - 1}{k0[-2:]}"
+            for c, m in snap.items():
+                if c.startswith("__"):
+                    continue
+                a, p1, p4 = q_margin(c, k0), q_margin(c, k1), q_margin(c, k4)
+                if a and a[0] is not None:
+                    m["gm_q"] = a[0]
+                    if p4 and p4[0] is not None:
+                        m["gm_yoy"] = a[0] - p4[0]
+                    if p1 and p1[0] is not None:
+                        m["gm_qoq"] = a[0] - p1[0]
+                if a and a[1] is not None and p4 and p4[1] is not None:
+                    m["om_yoy"] = a[1] - p4[1]
         # 持有報酬：到下一次換股
         nxt = reb[n + 1] if n + 1 < len(reb) else None
         i0 = di[t]
@@ -933,6 +983,94 @@ def main():
                         "用 2018-2023 挑的最佳": best_train,
                         "它在 2023-2026 的名次": f"{rank_test.index(best_train) + 1} / {len(grid)}"}
     u.log("下車網格: " + json.dumps(out["exit_grid"], ensure_ascii=False)[:3000])
+    # ---- 毛利率：營收上修但毛利率大降（像致茂 2026Q3）是不是比較差
+    if incdb:
+        gm = {"說明": "毛利率變化用最新已公布一季（公布期限後下個月才使用），單位百分點；營益率同。網站規則＝市值≥100億＋上修≥1＋外資≥30%＋3年成長≥10%，前10、每月不符合就換、高點回落30%下車"}
+        cov = [sum(1 for c, m in records[i][1].items() if not c.startswith("__") and m.get("gm_yoy") is not None) for i in reb]
+        gm["每次換股有毛利率年變化的公司數（最少/中位）"] = f"{min(cov)} / {sorted(cov)[len(cov) // 2]}"
+        ic = {}
+        for k, lab in (("gm_yoy", "毛利率年變化"), ("gm_qoq", "毛利率季變化"), ("om_yoy", "營益率年變化"), ("gm_q", "毛利率水準")):
+            for only_up in (False, True):
+                for H in (1, 3, 12):
+                    ics, spread = [], []
+                    for n, idx in enumerate(reb[:-H]):
+                        t, snap = records[idx]
+                        fut = [records[reb[n + j]][1] for j in range(H)]
+                        f_, r_ = {}, {}
+                        for c, m in snap.items():
+                            if c.startswith("__") or (m.get("cap") or 0) < MIN_CAP or m.get(k) is None:
+                                continue
+                            if only_up and (m.get("rev_up_n") or 0) < 1:
+                                continue
+                            g = 1.0
+                            for f in fut:
+                                h = (f.get(c) or {}).get("hold")
+                                if h is None:
+                                    g = None
+                                    break
+                                g *= 1 + h
+                            if g is not None:
+                                f_[c], r_[c] = m[k], g - 1
+                        if len(f_) < 30:
+                            continue
+                        v = b.spearman(f_, r_)
+                        if v is not None:
+                            ics.append(v)
+                        cs = sorted(f_, key=lambda c: f_[c])
+                        n3 = len(cs) // 3
+                        spread.append(sum(r_[c] for c in cs[-n3:]) / n3 - sum(r_[c] for c in cs[:n3]) / n3)
+                    if len(ics) >= 10:
+                        tt = b.nw_t(ics, max(1, H - 1))
+                        ic[f"{lab}｜{'營收上修中' if only_up else '市值≥100億全部'}｜之後 {H} 個月"] = {
+                            "IC": round(sum(ics) / len(ics) * 100, 2), "t": tt and round(tt, 2), "次數": len(ics),
+                            "最高 1/3 減最低 1/3 報酬": round(sum(spread) / len(spread) * 100, 1),
+                            "高組勝出比例": round(sum(x > 0 for x in spread) / len(spread) * 100)}
+        gm["預測力"] = ic
+        u.log("毛利率預測力: " + json.dumps(ic, ensure_ascii=False)[:3000])
+        base = lambda m: (m.get("rev_up_n") or 0) >= 1 and (m.get("qf") or 0) >= 30 and m.get("cagr3") is not None and m["cagr3"] >= 0.10
+        nd = lambda m, k, v: m.get(k) is None or m[k] >= v      # 沒有資料（金融業等）不排除
+        GM = {
+            "網站規則（基準）": base,
+            "＋排除毛利率年減 > 3 個百分點": lambda m: base(m) and nd(m, "gm_yoy", -3),
+            "＋排除毛利率年減 > 5 個百分點": lambda m: base(m) and nd(m, "gm_yoy", -5),
+            "＋排除毛利率年減 > 10 個百分點": lambda m: base(m) and nd(m, "gm_yoy", -10),
+            "＋排除毛利率季減 > 3 個百分點": lambda m: base(m) and nd(m, "gm_qoq", -3),
+            "＋排除毛利率季減 > 5 個百分點": lambda m: base(m) and nd(m, "gm_qoq", -5),
+            "＋排除營益率年減 > 3 個百分點": lambda m: base(m) and nd(m, "om_yoy", -3),
+            "＋只要毛利率年增（≥ 0）": lambda m: base(m) and nd(m, "gm_yoy", 0),
+            "＋只要營益率年增（≥ 0）": lambda m: base(m) and nd(m, "om_yoy", 0),
+        }
+        gm["網站規則加毛利率條件"] = {}
+        for name, en in GM.items():
+            rule = (lambda en: (lambda sl, m, rk: (not en(m)) or sl["g"] / sl["pk"] <= 0.7))(en)
+            r = exit_test(10, rule, entry=en)
+            gm["網站規則加毛利率條件"][name] = {k: r[k] for k in ("年化", "0050 年化", "2018-2023 年化", "2018-2023 0050", "2023-2026 年化", "2023-2026 0050",
+                                                       "每月贏 0050 比例", "最大回撤", "平均持有月數", "下車時虧損 > 30% 的比例", "最差一筆")}
+            u.log(f"毛利率條件 {name}: " + json.dumps(gm["網站規則加毛利率條件"][name], ensure_ascii=False))
+        ex, ok = [], []
+        for n, idx in enumerate(reb[:-3]):
+            t, snap = records[idx]
+            fut = [records[reb[n + j]][1] for j in range(3)]
+            mk3 = 1.0
+            for f in fut:
+                mk3 *= 1 + ((f.get("__mkt") or {}).get("hold") or 0)
+            for c, m in snap.items():
+                if c.startswith("__") or (m.get("cap") or 0) < MIN_CAP or not base(m) or m.get("gm_yoy") is None:
+                    continue
+                g = 1.0
+                for f in fut:
+                    h = (f.get(c) or {}).get("hold")
+                    if h is None:
+                        g = None
+                        break
+                    g *= 1 + h
+                if g is None:
+                    continue
+                (ex if m["gm_yoy"] < -5 else ok).append(g - mk3)
+        st = lambda xs: {"筆數": len(xs), "平均超額": round(sum(xs) / len(xs) * 100, 1), "贏 0050 比例": round(sum(x > 0 for x in xs) / len(xs) * 100)} if xs else None
+        gm["符合網站規則的股票，之後 3 個月相對 0050"] = {"毛利率年減 > 5 個百分點": st(ex), "其他": st(ok)}
+        u.log("毛利率分組: " + json.dumps(gm["符合網站規則的股票，之後 3 個月相對 0050"], ensure_ascii=False))
+        out["gross_margin"] = gm
     out["persistence"] = persistence(records, reb, ind_of, e, di)
     u.save("research3.json", out)
 
