@@ -177,6 +177,7 @@ function flagHtml(s) {
   const m = s.m;
   if (state.tab === "step2") {
     const q = state.data.step2 || {};
+    if (q.stopped?.[s.c]) return ` <span class="flag warn" title="從買進後最高 ${q.stopped[s.c].peak} 回落 30%（${md(q.stopped[s.c].d)}）">回落 30%：下車</span>`;
     if ((q.added || []).includes(s.c) && (q.hist || []).length) return ' <span class="flag good" title="本季新進">新進</span>';
     if (!(q.live || []).includes(s.c)) return ' <span class="flag warn" title="現在已不符合條件，下次換股會剔除（期間內不用賣）">已不符合</span>';
     return s.ind ? ` <span class="flag">${esc(s.ind)}</span>` : "";
@@ -252,7 +253,8 @@ function renderStep2Info() {
       <li><b>比例</b>：<span class="chip ${lvCls[q.level_now] || "neutral"}">現在：${esc(q.level_now || "—")}</span>
         建議個股合計 <b>${q.stock_w ?? "—"}%</b>（每檔約 ${q.per_w ?? "—"}%），其餘放 0050。
         ${(q.fav || []).map((t) => `<span class="chip good">${esc(t)}</span>`).join(" ")} ${(q.unfav || []).map((t) => `<span class="chip warn">${esc(t)}</span>`).join(" ")}</li>
-      <li><b>期間內不用賣</b>：停利、過熱出場在回測裡都比較差；季中變成「已不符合」也等到下次換股再換。</li>
+      <li><b>持有與下車</b>：換股日只換掉<b>不再符合條件</b>的股票，還符合的續抱（好股票可以一直抱）；期間內只有<b>從買進後最高點回落 30%</b> 才提前下車。
+        不設「賺多少就走」（回測：賺 50% 就走年化只剩 23%，永遠不賣只有 19%、一半的下車是虧超過 30%）。</li>
       <li><b>本益比位階、技術面、籌碼面</b>只當參考：同樣要買時，可優先買位階不貴、沒有漲多的。</li>
     </ol>
     <p class="note">本季至今：名單平均 <b>${pct(q.ret)}</b>，0050 <b>${pct(q.ret0050)}</b>（不含股利）。
@@ -260,8 +262,8 @@ function renderStep2Info() {
     ${hist.length ? `<table class="kv"><tr><td>期間</td><td>檔數</td><td>名單</td><td>0050</td></tr>${hist.map((h) =>
       `<tr><td>${md(h.start)}~${md(h.end)}</td><td>${h.n}</td><td>${pct(h.ret)}</td><td>${pct(h.ret0050)}</td></tr>`).join("")}</table>` : ""}
     ${crashHtml()}
-    <p class="note">回測（2018~2026，已扣交易成本）：這套條件每季換一次，三種換股月份年化 26.9~28.6%，0050 22.1%；2018~23、2023~26 兩段都贏，最大回撤約 −28%。
-      但每個月贏 0050 的比例只有約 45%（贏的時候贏比較多），要整季、整組看，不要看單月單檔。
+    <p class="note">回測（2018~2026，已扣交易成本）：10 檔全押個股、照上面的持有與下車規則，年化 36.7%（2018~23 18.5%、2023~26 68.7%），0050 22.1%；但最大回撤 −46%。
+      每檔 5%、其餘放 0050 的版本年化約 27~28%、最大回撤約 −28%。每個月贏 0050 的比例約 5 成，要整季、整組看，不要看單月單檔。
       有利／不利的判斷樣本少，可能是巧合，從這一季開始實際記錄驗證。不是投資建議。</p></div>`;
 }
 
@@ -287,8 +289,9 @@ function holdAdvice(s) {
   let act = "照自己的計畫", cls = "neutral";
   if ((k.codes || []).includes(s.c)) { act = k.active ? "大跌名單：分批買、持有 12 個月" : "在大跌名單（未啟用）"; cls = k.active ? "good" : "neutral"; }
   if ((q.codes || []).includes(s.c)) {
-    if ((q.live || []).includes(s.c)) { act = `本季名單：續抱到 ${q.next || "下次換股"}`; cls = "good"; }
-    else { act = `已不符合：${q.next || "下次換股"} 換掉（期間內不用賣）`; cls = "warn"; }
+    if (q.stopped?.[s.c]) { act = "從高點回落 30%：下車"; cls = "warn"; }
+    else if ((q.live || []).includes(s.c)) { act = `本季名單：續抱（距買進後高點 ${q.dd?.[s.c] ?? "—"}%）`; cls = "good"; }
+    else { act = `已不符合條件：${q.next || "下次換股"} 換掉`; cls = "warn"; }
   } else if ((q.live || []).includes(s.c)) { act = "符合條件，下次換股可能入選"; cls = "good"; }
   if (m.rev_up_n === 0) out.push(["warn", "營收預估本月下修"]);
   if (m.rev_up_n >= 1) out.push(["good", `營收預估上修中（${m.rev_up_n} 個月）`]);
@@ -301,13 +304,13 @@ function holdAdvice(s) {
 function renderStep3() {
   const list = state.data.stocks.filter((s) => state.watch.has(s.c));
   if (!list.length) { $("#watchInfo").innerHTML = '<div class="rulebox"><b>③ 持股監控</b><p class="note">還沒有持股。在任何清單點 ☆ 加入，這裡會每天檢查它還在不在本季名單、大跌名單。</p></div>'; return; }
-  $("#watchInfo").innerHTML = `<div class="rulebox"><b>③ 持股監控</b>　<span class="note">每天收盤後更新；本季名單持有到換股日、大跌名單持有 12 個月</span>
+  $("#watchInfo").innerHTML = `<div class="rulebox"><b>③ 持股監控</b>　<span class="note">每天收盤後更新；本季名單符合條件就續抱、回落 30% 下車；大跌名單持有 12 個月</span>
     <table class="kv" style="margin-top:8px"><tr><td>股票</td><td>建議</td><td>訊號</td></tr>
     ${list.map((s) => { const a = holdAdvice(s); return `<tr><td><a href="#${s.c}" data-open="${s.c}">${s.c} ${esc(s.n)}</a></td>
       <td><span class="chip ${a.cls}">${a.act}</span></td><td>${a.out.map(([c, t]) => `<span class="chip ${c}">${t}</span>`).join(" ") || NA}</td></tr>`; }).join("")}
     </table>
-    <p class="note"><b>為什麼不設停利、停損</b>：回測過過熱停利、賺 30%／50% 停利、從高點回落 20% 停損、本益比 &gt; +1.5σ 賣出，全部比「到換股日再換」差，
-      因為會提早賣掉大漲的股票。所以只在換股日依條件換股。</p></div>`;
+    <p class="note"><b>下車規則怎麼來的</b>：回測比較過各種出場方式。最好的是「換股日不符合條件才換＋從買進後高點回落 30% 提前下車」；
+      回落 20% 就跑太容易被洗掉，賺 50% 就走、過熱停利、本益比太貴就賣都會提早賣掉大漲的股票，永遠不賣則會遇到宏達電式的大虧。</p></div>`;
 }
 
 let etfState = { kind: "", sort: "avgval", asc: false };
@@ -438,7 +441,7 @@ function renderHow() {
        「產業族群」用證交所產業分類；AI 等趨勢用人工整理的產業鏈環節（data/themes.json，可自行修改）。</p>
     <p><b>② 本季名單</b>：市值 ≥ 100 億、營收預估上修中、外資持股 ≥ 20%、近 3 年營收年成長 ≥ 10%，每產業最多 2 檔、最多 20 檔；每季換一次，其餘資金放 0050。族群分數只當趨勢參考，不用來篩選（回測篩族群會錯過台積電等大型股）。</p>
     <p><b>大跌加碼名單</b>：0050 距一年高點跌超過 15% 時啟用。候選是營收上修中、前瞻本益比 &lt; −0.5σ 的大型股，依外資持股 40%＋3 年營收成長 40%＋市值 20% 排序取前 10，分批買、持有 12 個月。</p>
-    <p><b>③ 持股監控</b>：☆ 加入的股票每天檢查還在不在名單；不設停利、停損（回測都比較差）。</p>
+    <p><b>③ 持股監控</b>：☆ 加入的股票每天檢查還在不在名單、有沒有從高點回落 30%。不設「賺多少就走」（回測較差）。</p>
     <h3>分數</h3>
     <table><tr><th>面向</th><th>權重</th><th>內容</th></tr>
       <tr><td>基本面</td><td>100%</td><td>營收預估連續上修月數 30%、近 3 月上修幅度 20%、營收距 12 月新高 20%、營收動能 15%、營收連續年增 15%</td></tr>

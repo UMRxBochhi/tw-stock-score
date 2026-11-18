@@ -1592,7 +1592,11 @@ def sync_hist(prices, t86):
 # 每季（3、6、9、12 月 11 日後）換一次；每檔 5%，其餘放 0050；名單與當時價格記在 data/quarter.json，之後可對帳
 Q_MONTHS = (3, 6, 9, 12)
 Q_MAX, Q_PER_IND, Q_PER_W = 20, 2, 0.05
-Q_RULE, Q_QF, Q_CAGR = 2, 20.0, 10.0
+Q_RULE, Q_QF, Q_CAGR = 3, 20.0, 10.0
+Q_STOP = 0.30     # 從買進後最高點回落 30% 就提前下車
+# Q_RULE 3（研究 3 下車訊號）：換股日只換掉不再符合條件的股票，還符合的續抱；期間內從高點回落 30% 提前下車。
+# 同基準回測（10 檔全押個股）：每季重挑 34.0%、不符合才換 34.4%、不符合才換＋回落 30% 停損 36.7%（0050 22.1%），
+# 賺 50% 就走 23.2%、永遠不賣 18.8%（有一半的下車是虧超過 30%）
 
 
 def add_cagr3(stocks, fund):
@@ -1636,15 +1640,24 @@ def quarter_plan(stocks, prices, last, fund):
             and (x["m"].get("rev_up_n") or 0) >= 1 and (x["m"].get("qf") or 0) >= Q_QF
             and x["m"].get("cagr3") is not None and x["m"]["cagr3"] >= Q_CAGR]
     cand.sort(key=lambda x: -x["s"]["score"])
-    pick, cnt = [], {}
-    for x in cand:
-        g = x["ind"] or "?"
-        if cnt.get(g, 0) >= Q_PER_IND:
-            continue
-        cnt[g] = cnt.get(g, 0) + 1
-        pick.append(x["c"])
-        if len(pick) >= Q_MAX:
-            break
+    qual = [x["c"] for x in cand]
+    ind_of = {x["c"]: x["ind"] or "?" for x in stocks}
+
+    def select(keep):
+        """keep：上一期還符合條件、沒被停損的股票（續抱）；空位依分數補，每產業最多 Q_PER_IND 檔"""
+        pick = list(keep)[:Q_MAX]
+        cnt = {}
+        for c in pick:
+            cnt[ind_of.get(c, "?")] = cnt.get(ind_of.get(c, "?"), 0) + 1
+        for c in qual:
+            if len(pick) >= Q_MAX:
+                break
+            g = ind_of.get(c, "?")
+            if c in pick or cnt.get(g, 0) >= Q_PER_IND:
+                continue
+            cnt[g] = cnt.get(g, 0) + 1
+            pick.append(c)
+        return pick
 
     d = datetime.strptime(last, "%Y%m%d")
     mo = d.month
@@ -1662,17 +1675,44 @@ def quarter_plan(stocks, prices, last, fund):
 
     key = f"{d.year}-{mo:02d}"
     due = mo in Q_MONTHS and d.day >= 11 and (not st["cur"] or st["cur"]["key"] != key)
+    changed = False
     if not st["cur"] or due:
         prev = st["cur"]
+        keep = []
         if prev:
+            stopped = prev.get("stopped", {})
             prev["end"] = last
-            prev["end_px"] = {c: px(last, c) for c in prev["codes"]}
+            prev["end_px"] = {c: (stopped[c]["px"] if c in stopped else px(last, c)) for c in prev["codes"]}
             prev["end_0050"] = px(last, "0050")
             st["hist"].append(prev)
+            keep = [c for c in prev["codes"] if c in qual and c not in stopped]
+        pick = select(keep)
+        peak = {c: (prev or {}).get("peak", {}).get(c) or px(last, c) for c in pick}
+        entry = {c: ((prev or {}).get("entry", {}).get(c) if c in keep else None) or last for c in pick}
         st["cur"] = {"key": key, "rule": Q_RULE, "start": last, "codes": pick, "px": {c: px(last, c) for c in pick},
-                     "p0050": px(last, "0050"), "level": level, "share": share,
+                     "p0050": px(last, "0050"), "level": level, "share": share, "peak": peak, "entry": entry, "stopped": {},
                      "added": [c for c in pick if not prev or c not in prev["codes"]],
                      "removed": [c for c in prev["codes"] if c not in pick] if prev else []}
+        changed = True
+    # 每天更新買進後最高價；回落 30% 就標記提前下車（之後不再算進本期報酬，下次換股不再續抱）
+    cur = st["cur"]
+    cur.setdefault("peak", {})
+    cur.setdefault("stopped", {})
+    for c in cur["codes"]:
+        p = px(last, c)
+        if not p or c in cur["stopped"]:
+            continue
+        old_pk = cur["peak"].get(c)
+        if old_pk and p / old_pk < 0.4:          # 分割等異常：重設
+            cur["peak"][c] = p
+            continue
+        if not old_pk or p > old_pk:
+            cur["peak"][c] = p
+            changed = True
+        elif p <= old_pk * (1 - Q_STOP):
+            cur["stopped"][c] = {"d": last, "px": p, "peak": old_pk}
+            changed = True
+    if changed:
         save("quarter.json", st)
 
     def perf(q, end_px, end50):
@@ -1681,8 +1721,8 @@ def quarter_plan(stocks, prices, last, fund):
         r50 = ret(q["p0050"], end50)
         return (round(sum(rs) / len(rs) * 100, 1) if rs else None), (round(r50 * 100, 1) if r50 is not None else None)
 
-    cur = st["cur"]
-    r_basket, r_50 = perf(cur, {c: px(last, c) for c in cur["codes"]}, px(last, "0050"))
+    r_basket, r_50 = perf(cur, {c: (cur["stopped"][c]["px"] if c in cur["stopped"] else px(last, c)) for c in cur["codes"]},
+                          px(last, "0050"))
     ny, nm = d.year, next((m for m in Q_MONTHS if m > mo or (m == mo and d.day < 11)), None)
     if nm is None:
         ny, nm = ny + 1, Q_MONTHS[0]
@@ -1693,7 +1733,11 @@ def quarter_plan(stocks, prices, last, fund):
             "level": cur.get("level"), "level_now": level, "fav": fav, "unfav": unfav,
             "m60": round(m60 * 100, 1) if m60 is not None else None,
             "stock_w": round(stock_w * 100), "per_w": round(stock_w / n * 100, 1) if n else 0,
-            "ret": r_basket, "ret0050": r_50, "live": pick,
+            "ret": r_basket, "ret0050": r_50, "live": qual,
+            "stopped": {c: v for c, v in cur["stopped"].items()},
+            "dd": {c: round((px(last, c) / cur["peak"][c] - 1) * 100, 1) for c in cur["codes"]
+                   if px(last, c) and cur["peak"].get(c)},
+            "entry": cur.get("entry", {}),
             "hist": [dict(zip(("key", "start", "end", "ret", "ret0050", "n"),
                               (h["key"], h["start"], h["end"], *perf(h, h["end_px"], h["end_0050"]), len(h["codes"]))))
                      for h in st["hist"]]}
