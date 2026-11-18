@@ -1942,7 +1942,7 @@ def crash_plan(stocks, prices, last, pe_monthly, fund):
             x["m"]["crash_sc"] = round((0.4 * rq[x["c"]] + 0.4 * rg[x["c"]] + 0.2 * rc[x["c"]]) * 100)
     rows.sort(key=lambda x: -x["m"]["crash_sc"])
     return {"dd": round(dd * 100, 1) if dd is not None else None, "active": dd is not None and dd <= CRASH_DD,
-            "n": len(rows), "codes": [x["c"] for x in rows[:10]],
+            "n": len(rows), "codes": [x["c"] for x in rows[:10]], "all": [x["c"] for x in rows],
             "rows": [{"c": x["c"], "sc": x["m"]["crash_sc"], "zf": x["m"]["fpe_zf"], "qf": x["m"].get("qf"),
                       "cagr3": x["m"]["cagr3"], "cap": round((x["m"].get("cap") or 0) / 1e8), "up": x["m"].get("rev_up_n")}
                      for x in rows[:10]]}
