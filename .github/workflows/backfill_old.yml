@@ -1,0 +1,47 @@
+name: backfill_old
+
+# 往前補 2006~2017 歷史資料（scripts/backfill_old.py）。一輪最多約 160 分鐘，沒補完就自己再觸發下一輪，直到補完或卡住
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [scripts/backfill_old.py]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: backfill_old
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: 補 2006~2017
+        run: python scripts/backfill_old.py
+        env:
+          BACKFILL_MINUTES: "160"
+      - name: commit
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A data/hist data/probe_backfill_old.json
+          git diff --cached --quiet || git commit -m "backfill 2006~2017: $(TZ=Asia/Taipei date +'%F %H:%M')"
+          for i in 1 2 3 4 5; do git pull --rebase -X theirs && git push && break; sleep 15; done
+      - name: 沒補完就接著下一輪
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f data/hist/backfill_old_done.json ]; then echo "已補完"; exit 0; fi
+          if [ -f data/hist/backfill_old_stalled.json ]; then echo "卡住，停止接續"; exit 0; fi
+          gh workflow run backfill_old.yml --ref main

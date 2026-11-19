@@ -1707,7 +1707,7 @@ Q_STOP = 0.30     # 從買進後最高點回落 30% 就提前下車
 # ---------------------------------------------------------------- 除權息、減資（報酬含股利用）
 # data/hist/div.json：{"f": {代號: {yyyymmdd: 還原係數}}, "done": [已補完的年份區段]}
 # 還原係數 = 除權息（或減資）前收盤價 ÷ 參考價；當天報酬 = 收盤 ÷ 前一天收盤 × 係數
-DIV_FROM = 2007
+DIV_FROM = 2005
 
 
 def _roc_ymd(s):
@@ -1738,16 +1738,20 @@ def fetch_divs(d0: date, d1: date):
     s0, s1 = d0.strftime("%Y%m%d"), d1.strftime("%Y%m%d")
     for path in ("exRight/TWT49U", "reducation/TWTAUU"):
         js = get_json(f"https://www.twse.com.tw/rwd/zh/{path}", {"startDate": s0, "endDate": s1, "response": "json"}, rwd=True)
-        if not js or str(js.get("stat", "")).upper() != "OK":
-            if js and "沒有符合" in str(js.get("stat", "")):
-                continue
+        if js is None:
             return None
+        if str(js.get("stat", "")).upper() != "OK":          # 查無資料、或太早的年份：當作沒有，不算失敗
+            log(f"  {path} {s0}~{s1}：{str(js.get('stat'))[:40]}")
+            continue
         add(js.get("data") or [], 0, 1, 3, 4)
     for path in ("bulletin/exDailyQ", "bulletin/revivt"):
         time.sleep(TPEX_SLEEP)
         js = get_json(f"{TPEX}/{path}", {"startDate": d0.strftime("%Y/%m/%d"), "endDate": d1.strftime("%Y/%m/%d"), "response": "json"})
-        if not js or str(js.get("stat", "")).lower() != "ok":
+        if js is None:
             return None
+        if str(js.get("stat", "")).lower() != "ok":
+            log(f"  {path} {s0}~{s1}：{str(js.get('stat'))[:40]}")
+            continue
         for t in js.get("tables") or []:
             add(t.get("data") or [], 0, 1, 3, 4)
     return out
