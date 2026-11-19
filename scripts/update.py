@@ -2220,7 +2220,11 @@ def trio_track(active, codes, seen, ds):
     last = ds[-1]
     px = lambda d, c: ((seen.get(d) or {}).get(c) or [None])[0]
     ym = last[:6]
-    if active and codes and px(last, "0050") and not any(r["start"][:6] == ym for r in st["rounds"]):
+    # 當天上櫃收盤還沒抓到（下午提早執行）就先不記，避免漏掉上櫃股；同一天的記錄以最後一次執行為準
+    full = has_otc(seen.get(last) or {})
+    if full:
+        st["rounds"] = [r for r in st["rounds"] if r["start"] != last]
+    if active and codes and full and px(last, "0050") and not any(r["start"][:6] == ym for r in st["rounds"]):
         # 回測用每月 11 日後第一個交易日；不是那天開始的（月中才跌破半年線）另外標記
         sched = int(last[6:]) >= 11 and not any(d[:6] == ym and int(d[6:]) >= 11 for d in ds[:-1])
         st["rounds"].append({"start": last, "codes": codes, "px": {c: px(last, c) for c in codes},

@@ -3,7 +3,7 @@
 - 大跌事件：0050 收盤距近 250 日高點 ≤ −15% 開始；回到距高點 −5% 以內才算結束（避免同一次大跌重複計算）
 - 進場點：每次事件「第一次跌破 −15% 那天」，以及事件期間每月 11 日後第一個交易日（且仍在 −15% 以下）
 - 選股範圍：市值 ≥ 100 億（發行股數 × 股價）、近 20 日平均成交值 ≥ 3000 萬
-- 報酬：價格報酬（不含股利，0050 同樣不含），持有 250 個交易日；單日漲跌超過 ±15%（分割/減資）當天視為 0；
+- 報酬：含股利（除權息、減資用 data/hist/div.json 還原；PRICE_ONLY=1 改回只算股價），持有 250 個交易日；還原後單日仍超過 ±15% 當天視為 0；
   中途下市或停止交易就以最後價格計（不事先排除，避免偷看未來）
 - 評估單位是「事件」：同一次大跌裡的多個進場點先平均，再看幾次事件裡有效
 輸出 data/research_crash.json
@@ -11,6 +11,7 @@
 import gzip
 import json
 import math
+import os
 import random
 import sys
 from pathlib import Path
@@ -70,6 +71,9 @@ def spearman(a, b):
     return cov / (va * vb) if va and vb else None
 
 
+DIVS = {} if os.environ.get("PRICE_ONLY") else u.load_divs()     # PRICE_ONLY=1：只算股價（舊版，比較用）
+
+
 def main():
     # ---- 股價：每檔一條序列（收盤、成交值）
     months = u.hist_months("px")
@@ -105,15 +109,17 @@ def main():
         cc = close.get(c, {})
         if i0 not in cc:
             return None
-        g, last = 1.0, cc[i0]
+        fac = DIVS.get(c) or {}
+        g, last, pend = 1.0, cc[i0], 1.0
         for i in range(i0 + 1, i1 + 1):
+            pend *= fac.get(dates[i], 1.0)          # 含股利：除權息／減資當天乘上還原係數
             v = cc.get(i)
             if not v:
                 continue
-            r = v / last
+            r = v / last * pend
             if 0.85 <= r <= 1.15:
                 g *= r
-            last = v
+            last, pend = v, 1.0
         return g - 1
 
     e = series("0050", 0, N - 1)
@@ -122,7 +128,7 @@ def main():
             k = e[i - 1] / e[i]
             for j in range(i):
                 e[j] = e[j] / k if e[j] else e[j]
-    ret50 = lambda i0, i1: e[i1] / e[i0] - 1
+    ret50 = lambda i0, i1: chain_ret("0050", i0, i1)       # 含股利（分割當天被 ±15% 規則排除）
 
     # ---- 大跌事件
     dd = []

@@ -11,6 +11,7 @@
 輸出 data/research3.json
 """
 import json
+import os
 import math
 import sys
 from pathlib import Path
@@ -98,6 +99,9 @@ def persistence(records, reb, ind_of, e, di):
                                  "只有 1 個月的比例": pct([r == 1 for r in runs]), "3 個月以上": pct([r >= 3 for r in runs]),
                                  "6 個月以上": pct([r >= 6 for r in runs]), "12 個月以上": pct([r >= 12 for r in runs]), "段數": len(runs)}
     return res
+
+
+DIVS = {} if os.environ.get("PRICE_ONLY") else u.load_divs()     # PRICE_ONLY=1：只算股價（舊版，比較用）
 
 
 def main():
@@ -287,14 +291,29 @@ def main():
         nxt = reb[n + 1] if n + 1 < len(reb) else None
         i0 = di[t]
         i1 = di[records[nxt][0]] if nxt is not None else None
+        # 不能用「持有期間有沒有分割、減資、停止交易」來篩選（那是事後才知道的，舊版這樣做會偷看未來）：
+        # 一律用含股利的累積報酬（除權息／減資乘上還原係數，還原後單日仍 ±15% 視為 0），停止交易就用最後價格
+        def tr_hold(c, p0):
+            fac = DIVS.get(c) or {}
+            g, last, pend = 1.0, p0, 1.0
+            for d in dates[i0 + 1:i1 + 1]:
+                pend *= fac.get(d, 1.0)
+                v = (px[d].get(c) or [None])[0]
+                if not v:
+                    continue
+                r = v / last * pend
+                if 0.85 <= r <= 1.15:
+                    g *= r
+                last, pend = v, 1.0
+            return g - 1
+
         for c, m in snap.items():
-            if i1 is None:
+            if i1 is None or c.startswith("__"):
                 continue
-            path = [px[d].get(c) for d in dates[i0:i1 + 1]]
-            path = [x for x in path if x]
-            if len(path) >= (i1 - i0) * 0.8 and len(u.after_split(path)) == len(path) and px[dates[i1]].get(c):
-                m["hold"] = px[dates[i1]][c][0] / m["p"] - 1
-        snap["__mkt"] = {"hold": e[i1] / e[i0] - 1} if i1 is not None and e[i0] and e[i1] else None
+            p0 = (px[dates[i0]].get(c) or [None])[0] or m.get("p")
+            if p0:
+                m["hold"] = tr_hold(c, p0)
+        snap["__mkt"] = {"hold": tr_hold("0050", (px[dates[i0]].get("0050") or [None])[0] or e[i0])} if i1 is not None and e[i0] and e[i1] else None
 
     def user_score(snap, W_f, W_t, W_c, liq_top=None):
         items = {c: m for c, m in snap.items() if not c.startswith("__")}

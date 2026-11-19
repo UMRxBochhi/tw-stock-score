@@ -38,7 +38,7 @@ def load():
         snaps = pickle.loads(Path(cache).read_bytes())
     else:
         dates, close, val = W.load_prices()
-        G = {c: W.growth(a) for c, a in close.items()}
+        G = {c: W.growth(a, dates, c) for c, a in close.items()}
         snaps = None
     E = G["0050"]
     for i in range(1, len(E)):

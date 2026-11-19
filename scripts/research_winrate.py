@@ -1,7 +1,7 @@
 # 勝率專題：「智邦型」（營收上修、創新高、前瞻本益比低、外資持股高、長期成長）單檔贏 0050 的機率，以及上車／下車方式
 """
 - 每月 11 日後第一個交易日檢查；選股範圍：市值 ≥ 100 億、近 20 日平均成交值 ≥ 3000 萬
-- 勝率 = 單檔在觀察期（訊號日起 6／12／24 個月）報酬 > 同期 0050；價格報酬（不含股利，0050 同樣不含）
+- 勝率 = 單檔在觀察期（訊號日起 6／12／24 個月）報酬 > 同期 0050；含股利報酬（0050 同樣含；PRICE_ONLY=1 改回只算股價）
 - 上車方式：等待期間錢放 0050；觀察期固定從訊號日起算 12 個月，所以不同上車方式可以直接比較
 - 下車方式：賣掉的錢轉回 0050（之後超額報酬就固定），每次換到 0050 扣 0.3%
 - 「新訊號」＝這個月符合、上個月不符合（避免同一段上漲被重複計算）
@@ -67,20 +67,12 @@ def load_prices():
     return dates, close, val
 
 
-def growth(arr):
-    """累積報酬指數：單日 ±15% 以上（分割、減資）當天視為 0；停止交易就維持最後值"""
-    out, last, cur = [], None, None
-    for v in arr:
-        if v:
-            if last is None:
-                cur = 1.0
-            else:
-                r = v / last
-                if 0.85 <= r <= 1.15:
-                    cur *= r
-            last = v
-        out.append(cur)
-    return out
+DIVS = {} if os.environ.get("PRICE_ONLY") else u.load_divs()     # PRICE_ONLY=1：只算股價（舊版，比較用）
+
+
+def growth(arr, dates=None, c=None):
+    """累積報酬指數（含股利）：除權息／減資當天乘上還原係數；還原後單日仍 ±15% 以上視為 0；停止交易就維持最後值"""
+    return u.tr_growth(arr, dates or [None] * len(arr), DIVS.get(c) if dates else None)
 
 
 def main():
@@ -91,7 +83,7 @@ def main():
         close = val = None
     else:
         dates, close, val = load_prices()
-        G = {c: growth(a) for c, a in close.items()}
+        G = {c: growth(a, dates, c) for c, a in close.items()}
         if pxc:
             pxc.write_bytes(pickle.dumps((dates, G)))
     N = len(dates)
