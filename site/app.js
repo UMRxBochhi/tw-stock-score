@@ -286,7 +286,7 @@ function renderStep2Info() {
       ${q.added?.length && hist.length ? `新進：${q.added.map(nm).join("、")}。` : ""}${q.removed?.length ? `剔除：${q.removed.map(nm).join("、")}。` : ""}</p>
     ${hist.length ? `<table class="kv"><tr><td>期間</td><td>檔數</td><td>名單</td><td>0050</td></tr>${hist.map((h) =>
       `<tr><td>${md(h.start)}~${md(h.end)}</td><td>${h.n}</td><td>${pct(h.ret)}</td><td>${pct(h.ret0050)}</td></tr>`).join("")}</table>` : ""}
-    <p class="note">回測（2018~2026，已扣交易成本，10 檔全押個股）：年化約 36%（2018~23 約 18%、2023~26 約 69%），0050 22.1%；最大回撤約 −40%。
+    <p class="note">回測（2018~2026，含股利、已扣交易成本，10 檔全押個股）：年化約 39%（2018~23 約 21%、2023~26 約 72%），0050 25.9%；最大回撤約 −36%。
       42 種參數組合（外資門檻、檢查頻率、停損幅度）裡 41 種贏 0050，所以不是靠剛好挑到某組參數；但每個月贏 0050 的比例只有約 5 成，要整組、拉長看。
       有利／不利的判斷樣本少，可能是巧合，從這一季開始實際記錄驗證。不是投資建議。</p></div>`;
   $$("#ruleInfo [data-s2all]").forEach((b) => (b.onclick = () => { state.step2All = b.dataset.s2all === "1"; render(); }));
