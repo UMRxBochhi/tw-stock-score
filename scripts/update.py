@@ -1704,6 +1704,108 @@ Q_STOP = 0.30     # 從買進後最高點回落 30% 就提前下車
 # 賺 50% 就走 23.2%、永遠不賣 18.8%（有一半的下車是虧超過 30%）
 
 
+# ---------------------------------------------------------------- 除權息、減資（報酬含股利用）
+# data/hist/div.json：{"f": {代號: {yyyymmdd: 還原係數}}, "done": [已補完的年份區段]}
+# 還原係數 = 除權息（或減資）前收盤價 ÷ 參考價；當天報酬 = 收盤 ÷ 前一天收盤 × 係數
+DIV_FROM = 2007
+
+
+def _roc_ymd(s):
+    """'113年01月04日'、'113/01/04'、'1130104' -> '20240104'"""
+    g = re.findall(r"\d+", str(s))
+    if len(g) == 1 and len(g[0]) == 7:
+        g = [g[0][:3], g[0][3:5], g[0][5:]]
+    if len(g) < 3:
+        return None
+    return f"{int(g[0]) + 1911}{int(g[1]):02d}{int(g[2]):02d}"
+
+
+def fetch_divs(d0: date, d1: date):
+    """區間內的除權息＋減資：{代號: {日期: 係數}}；任何一個來源失敗就回傳 None（下次重試）"""
+    out = {}
+
+    def add(rows, i_d, i_c, i_prev, i_ref):
+        for r in rows:
+            try:
+                c, t = str(r[i_c]).strip(), _roc_ymd(r[i_d])
+                a, b = num(r[i_prev]), num(r[i_ref])
+            except (IndexError, TypeError):
+                continue
+            if t and a and b and a > 0 and b > 0 and 0.2 < a / b < 20:
+                out.setdefault(c, {})
+                out[c][t] = round(out[c].get(t, 1.0) * a / b, 6)
+
+    s0, s1 = d0.strftime("%Y%m%d"), d1.strftime("%Y%m%d")
+    for path in ("exRight/TWT49U", "reducation/TWTAUU"):
+        js = get_json(f"https://www.twse.com.tw/rwd/zh/{path}", {"startDate": s0, "endDate": s1, "response": "json"}, rwd=True)
+        if not js or str(js.get("stat", "")).upper() != "OK":
+            if js and "沒有符合" in str(js.get("stat", "")):
+                continue
+            return None
+        add(js.get("data") or [], 0, 1, 3, 4)
+    for path in ("bulletin/exDailyQ", "bulletin/revivt"):
+        time.sleep(TPEX_SLEEP)
+        js = get_json(f"{TPEX}/{path}", {"startDate": d0.strftime("%Y/%m/%d"), "endDate": d1.strftime("%Y/%m/%d"), "response": "json"})
+        if not js or str(js.get("stat", "")).lower() != "ok":
+            return None
+        for t in js.get("tables") or []:
+            add(t.get("data") or [], 0, 1, 3, 4)
+    return out
+
+
+def update_divs():
+    p = DATA / "hist" / "div.json"
+    st = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {"f": {}, "done": []}
+    today = datetime.now(TW).date()
+    jobs = []
+    for y in range(DIV_FROM, today.year + 1, 2):        # 兩年一段；今年所在的區段每天重抓（含已公告、即將除權息）
+        y1 = min(y + 1, today.year)
+        tag = f"{y}-{y1}" if y1 < today.year else None
+        if tag not in st["done"]:
+            jobs.append((date(y, 1, 1), min(date(y1, 12, 31), today + timedelta(days=10)), tag))
+    n = 0
+    for a, b, tag in jobs:
+        res = fetch_divs(a, b)
+        if res is None:
+            log(f"  除權息 {a}~{b} 失敗")
+            continue
+        for c, v in res.items():
+            st["f"].setdefault(c, {}).update(v)
+            n += len(v)
+        if tag:
+            st["done"].append(tag)
+    if n:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(st, ensure_ascii=False, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+    log(f"  除權息／減資 {n} 筆（累計 {sum(len(v) for v in st['f'].values())} 筆、{len(st['f'])} 檔）")
+
+
+def load_divs():
+    p = DATA / "hist" / "div.json"
+    return json.loads(p.read_text(encoding="utf-8")).get("f", {}) if p.exists() else {}
+
+
+def tr_growth(arr, dates, fac=None):
+    """含股利的累積報酬指數：當天報酬 × 還原係數；還原後單日仍超過 ±15%（沒有資料的分割、減資）當天視為 0；
+    沒有成交就維持最後值。fac＝{日期: 係數}（load_divs()[代號]）"""
+    out, last, cur, pend = [], None, None, 1.0
+    fac = fac or {}
+    for v, t in zip(arr, dates):
+        pend *= fac.get(t, 1.0)                        # 除權息當天沒成交：係數留到下一個有成交的日子
+        if v:
+            if last is None:
+                cur = 1.0
+            else:
+                r = v / last * pend
+                if 0.85 <= r <= 1.15:
+                    cur *= r
+            last, pend = v, 1.0
+        elif last is None:
+            pend = 1.0
+        out.append(cur)
+    return out
+
+
 _REVH = None
 
 
@@ -2101,9 +2203,56 @@ def crash_plan(stocks, prices, last, pe_monthly, fund):
                       "cagr3": x["m"].get("cagr3"), "beta": x["m"]["crash_beta"], "cap": round((x["m"].get("cap") or 0) / 1e8),
                       "up": x["m"].get("rev_up_n")}
                      for x in rows[:10]],
-            "trio": {"active": below, "p50": round(e50[-1], 2), "ma120": round(ma120, 2) if ma120 else None,
-                     "gap": round((e50[-1] / ma120 - 1) * 100, 1) if ma120 else None,
-                     "n": len(tpool), "codes": [x["c"] for x in tpool[:3]], "all": [x["c"] for x in tpool]}}
+            "trio": (trio := {"active": below, "p50": round(e50[-1], 2), "ma120": round(ma120, 2) if ma120 else None,
+                              "gap": round((e50[-1] / ma120 - 1) * 100, 1) if ma120 else None,
+                              "n": len(tpool), "codes": [x["c"] for x in tpool[:3]], "all": [x["c"] for x in tpool],
+                              "log": _safe(lambda: trio_track(below, [x["c"] for x in tpool[:3]], seen, ds), "三檔組合記錄")})}
+
+
+# ---------------------------------------------------------------- 三檔組合實際記錄（驗證回測的 93%）
+# 每個月第一次啟用時，把名單與收盤價存進 data/trio_log.json；之後每天用含股利的報酬追蹤：
+# 個股賺 20% 就當天換成 0050（超額報酬凍結、扣 0.3% 換股成本），沒到就抱滿 250 個交易日（約 12 個月）。
+TRIO_TP, TRIO_DAYS, TRIO_COST = 0.20, 250, 0.003
+
+
+def trio_track(active, codes, seen, ds):
+    st = load("trio_log.json", {"rounds": []})
+    last = ds[-1]
+    px = lambda d, c: ((seen.get(d) or {}).get(c) or [None])[0]
+    ym = last[:6]
+    if active and codes and px(last, "0050") and not any(r["start"][:6] == ym for r in st["rounds"]):
+        # 回測用每月 11 日後第一個交易日；不是那天開始的（月中才跌破半年線）另外標記
+        sched = int(last[6:]) >= 11 and not any(d[:6] == ym and int(d[6:]) >= 11 for d in ds[:-1])
+        st["rounds"].append({"start": last, "codes": codes, "px": {c: px(last, c) for c in codes},
+                             "p0050": px(last, "0050"), "sched": sched, "done": False, "res": {}})
+        log(f"  三檔組合新記錄 {last}：{codes}")
+    divs = load_divs()
+    for r in st["rounds"]:
+        if r["done"] or r["start"] not in ds:
+            continue
+        i0 = ds.index(r["start"])
+        dts = ds[i0:]
+        n = len(dts) - 1
+        g50 = tr_growth([px(d, "0050") for d in dts], dts, divs.get("0050"))
+        res = {}
+        for c in r["codes"]:
+            g = tr_growth([px(d, c) for d in dts], dts, divs.get(c))
+            if not g or g[0] is None:
+                continue
+            hit = next((k for k in range(1, min(n, TRIO_DAYS) + 1) if g[k] and g[k] >= 1 + TRIO_TP), None)
+            k = hit if hit is not None else min(n, TRIO_DAYS)
+            rel = g[k] / g50[k] * (1 - (TRIO_COST if hit is not None else 0))
+            res[c] = {"d": dts[k], "r": round((g[k] - 1) * 100, 1), "r50": round((g50[k] - 1) * 100, 1),
+                      "ex": round((rel - 1) * 100, 1),
+                      "why": "賺 20% 換 0050" if hit is not None else ("滿 12 個月" if n >= TRIO_DAYS else None)}
+        r["res"] = res
+        r["days"] = n
+        if res:
+            r["ex"] = round(sum(v["ex"] for v in res.values()) / len(res), 1)
+        r["done"] = n >= TRIO_DAYS or (len(res) == len(r["codes"]) and all(v["why"] for v in res.values()))
+    save("trio_log.json", st)
+    fin = [r for r in st["rounds"] if r["done"] and r.get("ex") is not None]
+    return {"rounds": st["rounds"][-24:], "n_done": len(fin), "n_win": sum(r["ex"] > 0 for r in fin)}
 
 
 def _shift(k, n):
@@ -2197,6 +2346,8 @@ def main():
     log("== 集保大戶持股（每週）")
     update_tdcc(tdcc)
     save("tdcc.json", tdcc)
+    log("== 除權息／減資")
+    _safe(update_divs, "除權息")
     log("== 月營收 / 財報")
     fund = fetch_fundamentals(fund)
     log("== 月營收歷史（公開資訊觀測站）")

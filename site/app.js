@@ -345,7 +345,27 @@ function trioHtml() {
     <p class="note">候選：選股名單條件（市值 ≥ 100 億、營收預估上修中、外資持股 ≥ 30%、近 3 年營收成長 ≥ 10%）＋最新月營收創 12 個月新高，目前 ${t.n ?? 0} 檔；
       依外資持股 30%＋3 年營收成長 30%＋beta 40% 排序。${rest ? "其餘候選：" + rest + "。" : ""}</p>
     <p class="note">回測 2019~2025：0050 在半年線下的 15 個月份，照這樣買 3 檔，有 93% 的月份 12 個月後贏 0050（平均多 10%，最差一次 −5.6%；2019~22 是 91%、2023 後 100%）；
-      同樣規則在半年線上只有 62%，所以只在半年線下啟用。限制：只有 5 個年份的樣本；高 beta 股如果續跌會跌得比 0050 多；報酬不含股利。</p></div>`;
+      同樣規則在半年線上只有 62%，所以只在半年線下啟用。限制：只有 5 個年份的樣本；高 beta 股如果續跌會跌得比 0050 多。</p>
+    ${trioLogHtml(t.log)}</div>`;
+}
+
+function trioLogHtml(lg) {
+  if (!lg?.rounds?.length) return "";
+  const pct = (v) => v == null ? "—" : `${v > 0 ? "+" : ""}${v}%`;
+  const ymd = (d) => `${d.slice(0, 4)}/${+d.slice(4, 6)}/${+d.slice(6, 8)}`;
+  const rows = lg.rounds.slice().reverse().map((r) => {
+    const st = r.done ? (r.ex > 0 ? `<span class="chip good">贏 0050</span>` : `<span class="chip warn">輸 0050</span>`) : `<span class="chip neutral">進行中・第 ${r.days ?? 0} 天</span>`;
+    const each = r.codes.map((c) => {
+      const x = r.res?.[c];
+      return `${stockName(c)} ${pct(x?.r)}${x?.why ? `（${md(x.d)} ${x.why}）` : ""}`;
+    }).join("、");
+    const r50 = Object.values(r.res || {})[0]?.r50;
+    return `<tr><td>${ymd(r.start)}${r.sched ? "" : "*"}</td><td>${each}</td><td>${pct(r.done ? null : r50)}</td><td>${pct(r.ex)}</td><td>${st}</td></tr>`;
+  }).join("");
+  return `<p style="margin-top:10px"><b>實際記錄</b>　<span class="note">已結束 ${lg.n_done} 組，贏 0050 ${lg.n_win} 組</span></p>
+    <table class="kv"><tr><td>開始</td><td>3 檔（含股利報酬、下車原因）</td><td>0050</td><td>超額</td><td>結果</td></tr>${rows}</table>
+    <p class="note">每月第一次啟用時自動記下名單與收盤價，之後每天用含股利的報酬追蹤：個股賺 20% 就換成 0050（扣 0.3% 換股成本），沒到就抱滿 250 個交易日（約 12 個月）；超額＝3 檔各自相對 0050 的平均。
+      * 不是在每月 11 日後第一個交易日開始（回測用那天），月中才跌破半年線。這是驗證回測 93% 唯一真正的方法，至少要累積 10 組以上才看得出來。</p>`;
 }
 
 function crashHtml() {
