@@ -998,7 +998,7 @@ def main():
                              "最差一筆": r["最差一筆"], "每月贏 0050": r["每月贏 0050 比例"]})
     best_train = max(grid, key=lambda x: x["2018-2023"] or -99)
     rank_test = sorted(grid, key=lambda x: -(x["2023-2026"] or -99))
-    out["exit_grid"] = {"0050": {"年化": 22.1, "2018-2023": 9.8, "2023-2026": 42.8}, "全部": grid,
+    out["exit_grid"] = {"0050": {"年化": 25.9, "2018-2023": 13.7, "2023-2026": 46.4}, "全部": grid,
                         "用 2018-2023 挑的最佳": best_train,
                         "它在 2023-2026 的名次": f"{rank_test.index(best_train) + 1} / {len(grid)}"}
     u.log("下車網格: " + json.dumps(out["exit_grid"], ensure_ascii=False)[:3000])
