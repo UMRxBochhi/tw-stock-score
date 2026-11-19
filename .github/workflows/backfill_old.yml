@@ -37,8 +37,8 @@ jobs:
           git add -A data/hist data/probe_backfill_old.json
           git diff --cached --quiet || git commit -m "backfill 2006~2017: $(TZ=Asia/Taipei date +'%F %H:%M')"
           for i in 1 2 3 4 5; do git pull --rebase -X theirs && git push && break; sleep 15; done
-      - name: 沒補完就接著下一輪
-        if: always()
+      - name: 沒補完就接著下一輪（程式出錯就不接，避免一直重跑）
+        if: success()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

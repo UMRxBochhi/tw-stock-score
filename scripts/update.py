@@ -1810,6 +1810,14 @@ def tr_growth(arr, dates, fac=None):
     return out
 
 
+def load_pe_all():
+    """研究用：本益比月取樣＝2005~2016 舊資料（data/hist/pe_old.json，backfill_old.py）＋網站的近 10 年"""
+    p = DATA / "hist" / "pe_old.json"
+    pe = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    pe.update(load("pe_monthly.json", {}))
+    return pe
+
+
 _REVH = None
 
 
