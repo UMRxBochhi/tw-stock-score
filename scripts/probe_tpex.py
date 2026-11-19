@@ -18,15 +18,10 @@ D_NEW, D_OLD = "2026/11/13", "2024/04/01"
 R_NEW, R_OLD = "115/11/13", "113/04/01"
 T = "https://www.tpex.org.tw"
 URLS = {
-    # 除權息、減資（報酬含股利用）
-    "twse_div_2024": "https://www.twse.com.tw/rwd/zh/exchangeReport/TWT49U?startDate=20240101&endDate=20241231&response=json",
-    "twse_div_2018_2019": "https://www.twse.com.tw/rwd/zh/exchangeReport/TWT49U?startDate=20180101&endDate=20191231&response=json",
-    "twse_cap_2024": "https://www.twse.com.tw/rwd/zh/reducation/TWTAUU?startDate=20240101&endDate=20241231&response=json",
-    "tpex_div_new": f"{T}/www/zh-tw/bulletin/exDailyQ?startDate=2024/01/01&endDate=2024/12/31&response=json",
-    "tpex_div_new2": f"{T}/www/zh-tw/bulletin/exDailyQ?date=2024/01/01&endDate=2024/12/31&response=json",
-    "tpex_div_old": f"{T}/web/stock/exright/dailyquo/exDailyQ_result.php?l=zh-tw&d=113/01/01&ed=113/12/31&o=json",
-    "tpex_cap_new": f"{T}/www/zh-tw/bulletin/revivt?startDate=2024/01/01&endDate=2024/12/31&response=json",
-    "tpex_cap_old": f"{T}/web/bulletin/revivt/revivt_result.php?l=zh-tw&d=113/01/01&ed=113/12/31&o=json",
+    "twse_div_a": "https://www.twse.com.tw/rwd/zh/exRight/TWT49U?startDate=20240101&endDate=20241231&response=json",
+    "twse_div_b": "https://www.twse.com.tw/exchangeReport/TWT49U?response=json&strDate=20240101&endDate=20241231",
+    "twse_div_c": "https://www.twse.com.tw/rwd/zh/exRight/TWT49U?startDate=20180101&endDate=20191231&response=json",
+    "twse_div_d": "https://www.twse.com.tw/rwd/zh/exRight/TWT48U?response=json",
 }
 
 
