@@ -1665,6 +1665,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
                                                 for g in {x["ind"] for x in stocks if x["ind"]}}}, stocks, qf_latest).get("產業", [])),
         "step2": quarter_plan(stocks, prices, last, fund),
         "crash": crash_plan(stocks, prices, last, pe_monthly, fund),
+        "mkt_pe": _safe(lambda: market_pe(stocks, pe_monthly, fund), "大盤本益比"),
         "picks": {rid: top_picks([(x["c"], x["m"]) for x in stocks], rid) for rid in RULES},
     }
 
@@ -1756,6 +1757,100 @@ def add_fwd_z(stocks, pe_monthly, fund):
         sd = (sum((a - mu) ** 2 for a in fh) / len(fh)) ** 0.5
         if sd > 0:
             m["fpe_zf"] = round((_m.log(m["pe"] / fn) - mu) / sd, 2)
+
+
+def _safe(fn, label):
+    """新功能出錯時只記錄、不中斷整體更新"""
+    try:
+        return fn()
+    except Exception:
+        import traceback
+        log(f"{label} 失敗：" + traceback.format_exc()[-400:])
+        return None
+
+
+def market_pe(stocks, pe_monthly, fund):
+    """大盤本益比位階：市值加權（總市值 ÷ 總獲利，排除虧損公司）；前瞻版＝每家獲利 ×（1 + 營收預估成長，限 0.5~2.5 倍）。
+    位階＝和過去 60 個月比（取對數）。月資料用 pe_monthly（每月取樣的本益比、股價）× 當月發行股數（外資持股檔）。
+    回測 2018~2025：位階高低對 0050 之後 12 個月報酬「沒有」便宜比較好的關係（便宜時 +2%、偏貴時 +31%），只當估值參考"""
+    import math as _m
+    revh = load_revh(fund)
+    rev = fund.get("revenue", {})
+    sh_by_m, last_sh = {}, {}
+    for ym in hist_months("qf"):
+        d = hist_read("qf", ym)
+        for t in sorted(d):
+            for c, v in d[t].items():
+                if v and len(v) > 1 and v[1]:
+                    last_sh[c] = v[1]
+        sh_by_m[ym] = dict(last_sh)
+    if not sh_by_m:
+        return None
+    sh_keys = sorted(sh_by_m)
+    fc, ind = {}, {}
+
+    def factor(c, rk):
+        if (c, rk) not in fc:
+            h = revh.get(c) or {}
+            cur = [h.get(_shift(rk, i), [None])[0] for i in range(12)]
+            e = est12(h, rk) if h else None
+            f = e / sum(cur) if e and None not in cur and sum(cur) > 0 else None
+            fc[(c, rk)] = max(0.5, min(2.5, f)) if f else None
+        return fc[(c, rk)]
+
+    def fwd(c, rk):
+        if c not in ind:
+            ind[c] = industry(c, rev)
+        return 1.0 if ind[c] in FWD_SKIP_IND else factor(c, rk)
+
+    def agg(items):
+        """items: [(代號, 市值, 本益比, 營收月份)] → (本益比, 前瞻本益比, 檔數)"""
+        cap = earn = fcap = fearn = 0.0
+        n = 0
+        for c, cp, pe, rk in items:
+            if not cp or not pe or pe <= 0:
+                continue
+            e = cp / pe
+            cap += cp
+            earn += e
+            n += 1
+            f = fwd(c, rk)
+            if f:
+                fcap += cp
+                fearn += e * f
+        return (cap / earn if earn else None, fcap / fearn if fearn else None, n)
+
+    hist = []
+    for ym in sorted(pe_monthly):
+        k = [x for x in sh_keys if x <= ym]
+        sh = sh_by_m[k[-1]] if k else sh_by_m[sh_keys[0]]
+        rk = _roc_prev(ym)
+        pe, fpe, n = agg([(c, v[1] * sh[c], v[0], rk) for c, v in pe_monthly[ym].items()
+                          if v and v[0] and v[1] and c in sh])
+        if pe:
+            hist.append([ym, round(pe, 2), round(fpe, 2) if fpe else None, n])
+    revk = {c: max(h) for c, h in revh.items() if h}
+    now = agg([(x["c"], x["m"].get("cap"), x["m"].get("pe"), revk.get(x["c"])) for x in stocks
+               if x["m"].get("cap") and x["m"].get("pe")])
+
+    def pos(v, xs):
+        xs = [x for x in xs if x]
+        if v is None or len(xs) < 24:
+            return None, None, None, None
+        lx = [_m.log(x) for x in xs]
+        mu = sum(lx) / len(lx)
+        sd = (sum((a - mu) ** 2 for a in lx) / len(lx)) ** 0.5
+        if sd <= 0:
+            return None, None, None, None
+        return (round((_m.log(v) - mu) / sd, 2), round(sum(1 for x in xs if x < v) / len(xs) * 100),
+                round(_m.exp(mu), 2), round(sd, 4))
+    cur_ym = datetime.now(TW).strftime("%Y%m")
+    past = [h for h in hist if h[0] < cur_ym][-60:]
+    z, pct, mean, sd = pos(now[0], [h[1] for h in past])
+    fz, fpct, fmean, fsd = pos(now[1], [h[2] for h in past])
+    return {"pe": round(now[0], 2) if now[0] else None, "fpe": round(now[1], 2) if now[1] else None, "n": now[2],
+            "z": z, "pct": pct, "mean": mean, "sd": sd, "fz": fz, "fpct": fpct, "fmean": fmean, "fsd": fsd,
+            "hist": hist[-96:]}
 
 
 def add_cagr3(stocks, fund):

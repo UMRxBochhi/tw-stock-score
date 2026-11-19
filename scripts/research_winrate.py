@@ -511,6 +511,51 @@ def main():
         [x for x in table if x["挑法"] in ("外資30＋成長30＋beta40（大跌名單排序）", "外資30＋成長30＋beta40（網站版：高點前 beta）", "隨機 3 檔")],
         key=lambda x: (x["候選"], x["下車"], x["市場狀態"], x["挑法"]))
     out["三檔組合"] = three
+
+    # ---- 7. 組合條件 × 本益比位階：大盤狀態 × 候選池 × 前瞻本益比分組，看單檔與三檔組合勝率
+    ZB = {"不分位階": lambda m: True,
+          "便宜（< −1σ）": lambda m: zf(m, -1.0),
+          "偏便宜（< −0.5σ）": lambda m: zf(m, -0.5),
+          "合理（−0.5~+0.5σ）": lambda m: m.get("pe_zf") is not None and -0.5 <= m["pe_zf"] <= 0.5,
+          "偏貴（> +0.5σ）": lambda m: m.get("pe_zf") is not None and m["pe_zf"] > 0.5,
+          "沒有位階資料": lambda m: m.get("pe_zf") is None}
+    P7 = {k: POOLS[k] for k in ("網站條件（上修＋外資≥30%＋3年成長≥10%）", "網站條件＋創新高",
+                                 "高勝率型（上修≥3＋創新高＋外資≥30%＋3年成長≥15%）")}
+    combo7 = []
+    for pn, pf in P7.items():
+        for zn, zfn in ZB.items():
+            for stn in ("半年線下", "半年線上", "全部"):
+                single = {"抱滿 12 個月": [], "賺 20% 就轉 0050": []}
+                trio = {"抱滿 12 個月": [], "賺 20% 就轉 0050": []}
+                for i in months:
+                    if i + D12 >= N or i < 250:
+                        continue
+                    st = mstate(i)["0050 半年線"]
+                    if stn != "全部" and st != stn:
+                        continue
+                    s = snaps.get(i) or {}
+                    cands = [c for c, m in s.items() if m.get("cap", 0) >= MIN_CAP and pf(m) and zfn(m) and G[c][i]]
+                    cur_i[0] = i
+                    for en in single:
+                        rr = {c: sret(c, i, en) for c in cands}
+                        rr = {c: r for c, r in rr.items() if r is not None}
+                        single[en] += [(i, r) for r in rr.values()]
+                        if len(rr) >= 3:
+                            sc = crash_sc_site(list(rr), s)
+                            pick = sorted(sc, key=lambda c: -sc[c])[:3]
+                            if len(pick) == 3:
+                                trio[en].append((i, sum(rr[c] for c in pick) / 3))
+                row = {"候選": pn, "位階": zn, "0050": stn}
+                for en in single:
+                    xs, ts = single[en], trio[en]
+                    row[f"單檔｜{en}"] = {"樣本": len(xs), "月數": len({i for i, _ in xs}), "勝率": pct([r > 1 for _, r in xs]),
+                                         "超額中位數": q([r - 1 for _, r in xs], 0.5)} if xs else None
+                    row[f"三檔｜{en}"] = {"月數": len(ts), "年份數": len({dates[i][:4] for i, _ in ts}),
+                                         "勝率": pct([r > 1 for _, r in ts]), "超額平均": round((sum(r for _, r in ts) / len(ts) - 1) * 100, 1),
+                                         "最差": round((min(r for _, r in ts) - 1) * 100, 1),
+                                         "前/後段勝率": f"{pct([r > 1 for i, r in ts if dates[i] < front_end])} / {pct([r > 1 for i, r in ts if dates[i] >= front_end])}"} if ts else None
+                combo7.append(row)
+    out["組合條件×本益比位階"] = combo7
     u.log("三檔組合 全部: " + json.dumps(three["全部月份（不分市場狀態）"][:8], ensure_ascii=False)[:2500])
 
     # ---- 5. 智邦自己的歷史

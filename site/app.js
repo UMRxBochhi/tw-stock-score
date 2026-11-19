@@ -251,6 +251,9 @@ function renderMarket() {
   const q = state.data.step2 || {};
   if (q.codes) cards.push(`<div class="card"><div class="lbl">② 選股名單</div><div class="val">${q.codes.length} 檔・${esc(q.level_now || "")}</div>
     <div class="note">建議個股 ${q.stock_w}%、其餘 0050；下次換股 ${q.next}　<a href="#" data-gotab="step2">看名單 →</a></div></div>`);
+  const mp = state.data.mkt_pe;
+  if (mp?.pe) cards.push(`<div class="card"><div class="lbl">大盤本益比位階</div><div class="val">${mp.pe} 倍・${mp.z > 0 ? "+" : ""}${mp.z ?? "—"}σ</div>
+    <div class="note">近 5 年第 ${mp.pct ?? "—"} 百分位；前瞻 ${mp.fpe ?? "—"} 倍（${mp.fz > 0 ? "+" : ""}${mp.fz ?? "—"}σ）　<a href="#" data-gotab="crash">看走勢 →</a></div></div>`);
   const k = state.data.crash;
   const t = k?.trio;
   if (t?.active) cards.push(`<div class="card"><div class="lbl">三檔組合</div><div class="val">已啟用</div>
@@ -290,7 +293,40 @@ function renderStep2Info() {
 }
 
 function renderCrashInfo() {
-  $("#ruleInfo").innerHTML = `<div class="rulebox">${trioHtml()}</div><div class="rulebox">${crashHtml()}</div>`;
+  $("#ruleInfo").innerHTML = `<div class="rulebox">${trioHtml()}</div><div class="rulebox">${mktPeHtml()}</div><div class="rulebox">${crashHtml()}</div>`;
+  drawMktPe();
+}
+
+function mktPeHtml() {
+  const mp = state.data.mkt_pe;
+  if (!mp?.pe) return "<b>大盤本益比位階</b>　<span class=\"note\">資料不足</span>";
+  const zone = (z) => z == null ? "—" : z < -0.5 ? "便宜（< −0.5σ）" : z > 0.5 ? "偏貴（> +0.5σ）" : "合理（±0.5σ）";
+  return `<div><b>大盤本益比位階</b>　<span class="note">上市櫃獲利公司 ${mp.n} 家，市值加權（總市值 ÷ 總獲利）</span>
+    <table class="kv" style="margin-top:8px"><tr><td></td><td>目前</td><td>近 5 年平均</td><td>位階</td><td>百分位</td><td>區間</td></tr>
+      <tr><td>本益比（近四季 EPS）</td><td>${mp.pe} 倍</td><td>${mp.mean ?? "—"} 倍</td><td>${signed(mp.z, 2, "σ")}</td><td>${mp.pct ?? "—"}</td><td>${zone(mp.z)}</td></tr>
+      <tr><td>前瞻本益比（EPS ×（1 + 營收預估成長））</td><td>${mp.fpe ?? "—"} 倍</td><td>${mp.fmean ?? "—"} 倍</td><td>${signed(mp.fz, 2, "σ")}</td><td>${mp.fpct ?? "—"}</td><td>${zone(mp.fz)}</td></tr></table>
+    <div id="chMktPe" class="chartbox"></div>
+    <p class="note"><b>只當估值參考，不是買賣訊號。</b>回測 2018~2025（85 個月）：大盤前瞻本益比便宜（< −0.5σ）時，0050 之後 12 個月平均只有 +2%、上漲比例 52%；
+      偏貴（> +0.5σ）時平均 +31%、上漲比例 96%。便宜常出現在獲利下滑、還在跌的時候（2022），偏貴常出現在獲利成長的多頭（AI 行情）。
+      要不要加碼看「三檔組合」的半年線規則比較有根據。獲利資料每季財報公布後更新，所以 5、8、11、3 月本益比會因 EPS 變動而跳動。</p></div>`;
+}
+
+function drawMktPe() {
+  const mp = state.data.mkt_pe, el = $("#chMktPe");
+  if (!mp?.hist?.length || !el) return;
+  const h = [...mp.hist, ["NOW", mp.pe, mp.fpe]];
+  const lbl = h.map((x) => x[0] === "NOW" ? "目前" : `${x[0].slice(0, 4)}/${x[0].slice(4, 6)}`);
+  const lv = mp.mean && mp.sd ? [-1, -0.5, 0, 0.5, 1].map((k) => +(mp.mean * Math.exp(k * mp.sd)).toFixed(2)) : null;
+  Charts.line(el, {
+    labels: lbl, height: 230,
+    xlabels: lbl.map((l, i) => h[i][0] === "NOW" ? "目前" : (h[i][0].slice(4, 6) === "01" ? l.slice(0, 4) : "")),
+    bands: lv ? [0, 1, 2, 3].map((i) => ({ lo: h.map(() => lv[i]), hi: h.map(() => lv[i + 1]), cls: "b" + (i + 1),
+      name: ["−1σ~−0.5σ", "−0.5σ~平均", "平均~+0.5σ", "+0.5σ~+1σ"][i] })) : [],
+    series: [{ name: "本益比", values: h.map((x) => x[1]), cls: "s-price" },
+      { name: "前瞻本益比", values: h.map((x) => x[2]), cls: "s-1" }],
+    tip: (i) => `<b>${lbl[i]}</b><br>本益比 ${h[i][1] ?? "—"} 倍<br>前瞻本益比 ${h[i][2] ?? "—"} 倍`,
+  });
+  el.insertAdjacentHTML("beforeend", `<p class="note">色帶＝近 5 年本益比（取對數）的平均 ±0.5σ、±1σ（用目前的 5 年區間畫）；藍線是前瞻本益比。</p>`);
 }
 
 const stockName = (c) => esc(state.data.stocks.find((s) => s.c === c)?.n || c);
