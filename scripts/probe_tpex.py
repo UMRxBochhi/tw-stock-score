@@ -18,10 +18,22 @@ D_NEW, D_OLD = "2026/11/13", "2024/04/01"
 R_NEW, R_OLD = "115/11/13", "113/04/01"
 T = "https://www.tpex.org.tw"
 URLS = {
-    "twse_div_a": "https://www.twse.com.tw/rwd/zh/exRight/TWT49U?startDate=20240101&endDate=20241231&response=json",
-    "twse_div_b": "https://www.twse.com.tw/exchangeReport/TWT49U?response=json&strDate=20240101&endDate=20241231",
-    "twse_div_c": "https://www.twse.com.tw/rwd/zh/exRight/TWT49U?startDate=20180101&endDate=20191231&response=json",
-    "twse_div_d": "https://www.twse.com.tw/rwd/zh/exRight/TWT48U?response=json",
+    # 2008~2017 回補可行性
+    "twse_px_2008": "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date=20081015&type=ALLBUT0999&response=json",
+    "twse_px_2005": "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date=20050315&type=ALLBUT0999&response=json",
+    "twse_qf_2008": "https://www.twse.com.tw/rwd/zh/fund/MI_QFIIS?date=20081015&selectType=ALLBUT0999&response=json",
+    "twse_qf_2012": "https://www.twse.com.tw/rwd/zh/fund/MI_QFIIS?date=20120315&selectType=ALLBUT0999&response=json",
+    "twse_pe_2008": "https://www.twse.com.tw/rwd/zh/afterTrading/BWIBBU_d?date=20081015&selectType=ALL&response=json",
+    "twse_pe_2005": "https://www.twse.com.tw/rwd/zh/afterTrading/BWIBBU_d?date=20050315&selectType=ALL&response=json",
+    "tpex_px_2008": f"{T}/www/zh-tw/afterTrading/dailyQuotes?date=2008/10/15&type=EW&response=json",
+    "tpex_qf_2008": f"{T}/www/zh-tw/insti/qfii?date=2008/10/15&response=json",
+    "tpex_qf_2012": f"{T}/www/zh-tw/insti/qfii?date=2012/03/15&response=json",
+    "tpex_pe_2008": f"{T}/www/zh-tw/afterTrading/peQryDate?date=2008/10/15&response=json",
+    "mops_sii_2004": "https://mopsov.twse.com.tw/nas/t21/sii/t21sc03_93_1_0.html",
+    "mops_sii_2008": "https://mopsov.twse.com.tw/nas/t21/sii/t21sc03_97_10_0.html",
+    "mops_sii_2008b": "https://mopsov.twse.com.tw/nas/t21/sii/t21sc03_97_10.html",
+    "mops_otc_2008": "https://mopsov.twse.com.tw/nas/t21/otc/t21sc03_97_10_0.html",
+    "mops_otc_2008b": "https://mopsov.twse.com.tw/nas/t21/otc/t21sc03_97_10.html",
 }
 
 
