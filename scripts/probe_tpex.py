@@ -18,32 +18,15 @@ D_NEW, D_OLD = "2026/11/13", "2024/04/01"
 R_NEW, R_OLD = "115/11/13", "113/04/01"
 T = "https://www.tpex.org.tw"
 URLS = {
-    # 新版網站
-    "new_quotes": f"{T}/www/zh-tw/afterTrading/dailyQuotes?date={D_NEW}&type=EW&response=json",
-    "new_quotes_old": f"{T}/www/zh-tw/afterTrading/dailyQuotes?date={D_OLD}&type=EW&response=json",
-    "new_otc": f"{T}/www/zh-tw/afterTrading/otc?date={D_NEW}&type=EW&response=json",
-    "new_insti": f"{T}/www/zh-tw/insti/dailyTrade?type=Daily&sect=EW&date={D_NEW}&response=json",
-    "new_insti_old": f"{T}/www/zh-tw/insti/dailyTrade?type=Daily&sect=EW&date={D_OLD}&response=json",
-    "new_pe": f"{T}/www/zh-tw/afterTrading/peQryDate?date={D_NEW}&response=json",
-    "new_pe_old": f"{T}/www/zh-tw/afterTrading/peQryDate?date={D_OLD}&response=json",
-    # 舊版網址
-    "old_quotes": f"{T}/web/stock/aftertrading/daily_close_quotes/stdcls_result.php?l=zh-tw&d={R_NEW}&se=EW&o=json",
-    "old_quotes2": f"{T}/web/stock/aftertrading/otc_quotes_no1430/stk_wn1430_result.php?l=zh-tw&d={R_NEW}&se=EW&o=json",
-    "old_insti": f"{T}/web/stock/3insti/daily_trade/3itrade_hedge_result.php?l=zh-tw&se=EW&t=D&d={R_NEW}&o=json",
-    "old_pe": f"{T}/web/stock/aftertrading/peratio_analysis/pera_result.php?l=zh-tw&d={R_NEW}&o=json",
-    # OpenAPI（只有最新一天）
-    "oa_quotes": f"{T}/openapi/v1/tpex_mainboard_daily_close_quotes",
-    "oa_insti": f"{T}/openapi/v1/tpex_3insti_daily_trading",
-    "oa_pe": f"{T}/openapi/v1/tpex_mainboard_peratio_analysis",
-    "oa_rev": f"{T}/openapi/v1/mopsfin_t187ap05_O",
-    "oa_inc": f"{T}/openapi/v1/mopsfin_t187ap06_O_ci",
-    "oa_bal": f"{T}/openapi/v1/mopsfin_t187ap07_O_ci",
-    "twse_oa_rev_O": "https://openapi.twse.com.tw/v1/opendata/t187ap05_O",
-    "twse_oa_inc_O": "https://openapi.twse.com.tw/v1/opendata/t187ap06_O_ci",
-    "twse_oa_bal_O": "https://openapi.twse.com.tw/v1/opendata/t187ap07_O_ci",
-    # 月營收歷史
-    "mops_otc": "https://mopsov.twse.com.tw/nas/t21/otc/t21sc03_115_10_0.html",
-    "mops_otc_old": "https://mopsov.twse.com.tw/nas/t21/otc/t21sc03_111_1_0.html",
+    # 除權息、減資（報酬含股利用）
+    "twse_div_2024": "https://www.twse.com.tw/rwd/zh/exchangeReport/TWT49U?startDate=20240101&endDate=20241231&response=json",
+    "twse_div_2018_2019": "https://www.twse.com.tw/rwd/zh/exchangeReport/TWT49U?startDate=20180101&endDate=20191231&response=json",
+    "twse_cap_2024": "https://www.twse.com.tw/rwd/zh/reducation/TWTAUU?startDate=20240101&endDate=20241231&response=json",
+    "tpex_div_new": f"{T}/www/zh-tw/bulletin/exDailyQ?startDate=2024/01/01&endDate=2024/12/31&response=json",
+    "tpex_div_new2": f"{T}/www/zh-tw/bulletin/exDailyQ?date=2024/01/01&endDate=2024/12/31&response=json",
+    "tpex_div_old": f"{T}/web/stock/exright/dailyquo/exDailyQ_result.php?l=zh-tw&d=113/01/01&ed=113/12/31&o=json",
+    "tpex_cap_new": f"{T}/www/zh-tw/bulletin/revivt?startDate=2024/01/01&endDate=2024/12/31&response=json",
+    "tpex_cap_old": f"{T}/web/bulletin/revivt/revivt_result.php?l=zh-tw&d=113/01/01&ed=113/12/31&o=json",
 }
 
 
@@ -56,7 +39,7 @@ def summarize(js):
                 info[k] = js[k]
         if isinstance(js.get("tables"), list):
             info["tables"] = [{"title": t.get("title"), "fields": t.get("fields"), "n": len(t.get("data") or []),
-                               "sample": (t.get("data") or [])[:3], "keys": list(t.keys())} for t in js["tables"][:4]]
+                               "sample": (t.get("data") or [])[:3] + (t.get("data") or [])[-1:], "keys": list(t.keys())} for t in js["tables"][:4]]
         for k, v in js.items():
             if isinstance(v, list) and v and k != "tables":
                 info["list_" + k] = {"n": len(v), "sample": v[:3]}
