@@ -2112,6 +2112,7 @@ def quarter_plan(stocks, prices, last, fund):
 # 回測持有 12 個月：能算 beta 的 4 次大跌都贏 0050（最差一次 +12.5%）；舊版（前瞻本益比 < −0.5σ 篩選）只有 3/5。
 # 大跌期間抗跌的、本益比便宜的、低 beta 的，之後反而落後 → 前瞻本益比位階只顯示、不篩選。
 CRASH_DD = -0.15
+CRASH_END = -0.05     # 0050 回到距一年高點 5% 以內：這次大跌結束，大跌名單換回 0050
 CRASH_W = {"qf": 0.3, "cagr3": 0.3, "beta": 0.4}
 TRIO_QF, TRIO_CAGR = 30.0, 10.0      # 三檔組合候選：外資持股 ≥ 30%、近 3 年營收成長 ≥ 10%（%）
 
@@ -2149,6 +2150,26 @@ def crash_plan(stocks, prices, last, pe_monthly, fund):
     if win:
         pk = max(win, key=lambda i: e50[i])
         dd = e50[win[-1]] / e50[pk] - 1
+
+    # 大跌分批（research_timing.py，2008~2026 九次大跌驗證）：0050 距一年高點跌 15%／20%／25% 各買 1/3；
+    # 回到距高點 −5% 以內＝這次大跌結束，大跌名單全部換回 0050。從觸發到結束都算「啟用中」
+    stage, on, t0, deep, hits, ended = None, False, None, 0.0, {}, None
+    for i in range(min(250, max(0, len(ds) - 1)), len(ds)):
+        w = [x for x in e50[max(0, i - 249):i + 1] if x]
+        if not e50[i] or not w:
+            continue
+        d_ = e50[i] / max(w) - 1
+        if not on and d_ <= CRASH_DD:
+            on, t0, deep, hits, ended = True, i, d_, {"15": ds[i]}, None
+        elif on:
+            deep = min(deep, d_)
+            for lv in (20, 25):
+                if d_ <= -lv / 100 and str(lv) not in hits:
+                    hits[str(lv)] = ds[i]
+            if d_ >= CRASH_END:
+                on, ended = False, ds[i]
+    if t0 is not None:
+        stage = {"on": on, "start": ds[t0], "deep": round(deep * 100, 1), "hits": hits, "end": ended}
 
     def beta_of(c):
         """高點之前 250 個交易日，個股對 0050 的 beta（單日 ±15% 視為分割／減資，略過）"""
@@ -2208,7 +2229,8 @@ def crash_plan(stocks, prices, last, pe_monthly, fund):
     for x in tpool:
         x["m"]["trio_sc"] = tsc.get(x["c"])
     tpool = sorted([x for x in tpool if x["m"].get("trio_sc") is not None], key=lambda x: -x["m"]["trio_sc"])
-    return {"dd": round(dd * 100, 1) if dd is not None else None, "active": dd is not None and dd <= CRASH_DD,
+    return {"dd": round(dd * 100, 1) if dd is not None else None,
+            "active": (dd is not None and dd <= CRASH_DD) or bool(stage and stage["on"]), "stage": stage,
             "peak": ds[pk] if pk is not None else None,
             "n": len(rows), "codes": [x["c"] for x in rows[:10]], "all": [x["c"] for x in rows],
             "rows": [{"c": x["c"], "sc": x["m"]["crash_sc"], "zf": x["m"].get("fpe_zf"), "qf": x["m"].get("qf"),

@@ -255,11 +255,11 @@ function renderMarket() {
   if (mp?.pe) cards.push(`<div class="card"><div class="lbl">大盤本益比位階</div><div class="val">${mp.pe} 倍・${mp.z > 0 ? "+" : ""}${mp.z ?? "—"}σ</div>
     <div class="note">近 5 年第 ${mp.pct ?? "—"} 百分位；前瞻 ${mp.fpe ?? "—"} 倍（${mp.fz > 0 ? "+" : ""}${mp.fz ?? "—"}σ）　<a href="#" data-gotab="crash">看走勢 →</a></div></div>`);
   const k = state.data.crash;
-  const t = k?.trio;
-  if (t?.active) cards.push(`<div class="card"><div class="lbl">三檔組合</div><div class="val">已啟用</div>
-    <div class="note">0050 在半年線下 ${t.gap}%：${(t.codes || []).map(stockName).join("、") || "沒有符合的股票"}　<a href="#" data-gotab="crash">看說明 →</a></div></div>`);
-  if (k?.active) cards.push(`<div class="card"><div class="lbl">大跌加碼名單</div><div class="val">已啟用・${k.n} 檔</div>
-    <div class="note">0050 距一年高點 ${k.dd}%　<a href="#" data-gotab="crash">看名單 →</a></div></div>`);
+  if (k?.active) {
+    const h = k.stage?.hits || {};
+    cards.push(`<div class="card"><div class="lbl">大跌加碼名單</div><div class="val">已啟用・第 ${["15", "20", "25"].filter((x) => h[x]).length}/3 批</div>
+    <div class="note">0050 距一年高點 ${k.dd}%；${h["25"] ? "三批都已觸發" : `下一批：跌到 ${h["20"] ? 25 : 20}%`}　<a href="#" data-gotab="crash">看名單 →</a></div></div>`);
+  }
   $("#market").innerHTML = cards.join("");
 }
 
@@ -293,7 +293,7 @@ function renderStep2Info() {
 }
 
 function renderCrashInfo() {
-  $("#ruleInfo").innerHTML = `<div class="rulebox">${trioHtml()}</div><div class="rulebox">${mktPeHtml()}</div><div class="rulebox">${crashHtml()}</div>`;
+  $("#ruleInfo").innerHTML = `<div class="rulebox">${crashHtml()}</div><div class="rulebox">${mktPeHtml()}</div><div class="rulebox">${trioHtml()}</div>`;
   drawMktPe();
 }
 
@@ -308,7 +308,7 @@ function mktPeHtml() {
     <div id="chMktPe" class="chartbox"></div>
     <p class="note"><b>只當估值參考，不是買賣訊號。</b>回測 2018~2025（85 個月）：大盤前瞻本益比便宜（< −0.5σ）時，0050 之後 12 個月平均只有 +2%、上漲比例 52%；
       偏貴（> +0.5σ）時平均 +31%、上漲比例 96%。便宜常出現在獲利下滑、還在跌的時候（2022），偏貴常出現在獲利成長的多頭（AI 行情）。
-      要不要加碼看「三檔組合」的半年線規則比較有根據。獲利資料每季財報公布後更新，所以 5、8、11、3 月本益比會因 EPS 變動而跳動。</p></div>`;
+      要不要加碼看「大跌加碼名單」的分批規則比較有根據。獲利資料每季財報公布後更新，所以 5、8、11、3 月本益比會因 EPS 變動而跳動。</p></div>`;
 }
 
 function drawMktPe() {
@@ -335,18 +335,12 @@ const stockLink = (c) => `<a href="#${c}" data-open="${c}">${c} ${stockName(c)}<
 function trioHtml() {
   const t = state.data.crash?.trio;
   if (!t) return "";
-  const head = t.active
-    ? `<span class="chip warn">已啟用</span> 0050 收盤 ${t.p50} 在半年線 ${t.ma120} 之下（${t.gap}%）：等金額買下面 3 檔，各自賺 20% 就換成 0050，沒到就抱 12 個月。`
-    : `<span class="chip neutral">未啟用</span> 0050 在半年線之上（${t.gap > 0 ? "+" : ""}${t.gap ?? "—"}%）；跌破半年線才啟用。平常時期同樣挑法只有約 6 成勝率而且不穩，先放 0050。`;
-  const picks = (t.codes || []).map(stockLink).join("、") || "目前沒有符合的股票";
-  const rest = (t.all || []).slice(3).map(stockLink).join("、");
-  return `<div><b>三檔組合</b>　<span class="note">${head}</span>
-    <p>前 3 名：${picks}${(t.codes || []).length < 3 ? "（不足 3 檔，其餘放 0050）" : ""}</p>
-    <p class="note">候選：選股名單條件（市值 ≥ 100 億、營收預估上修中、外資持股 ≥ 30%、近 3 年營收成長 ≥ 10%）＋最新月營收創 12 個月新高，目前 ${t.n ?? 0} 檔；
-      依外資持股 30%＋3 年營收成長 30%＋beta 40% 排序。${rest ? "其餘候選：" + rest + "。" : ""}</p>
-    <p class="note">回測 2019~2025：0050 在半年線下的 15 個月份，照這樣買 3 檔，有 93% 的月份 12 個月後贏 0050（平均多 10%，最差一次 −5.6%；2019~22 是 91%、2023 後 100%）；
-      同樣規則在半年線上只有 62%，所以只在半年線下啟用。限制：只有 5 個年份的樣本；高 beta 股如果續跌會跌得比 0050 多。</p>
-    ${trioLogHtml(t.log)}</div>`;
+  return `<details><summary><b>三檔組合（已停用）</b>　<span class="note">2008~2017 驗證沒有通過，改用下面大跌名單的分批規則</span></summary>
+    <p class="note">原規則：0050 在半年線下時，從選股名單條件＋營收創新高裡挑前 3 檔，賺 20% 換 0050、最長 12 個月。2019~2025 回測 93% 贏 0050，
+      但用規則定出來之前的 2008~2017 驗證（規則完全不改），27 個月份只有 44% 贏 0050、平均 −5.6%、最差 −35%（2011、2015 年挑到的股票一起大跌）；
+      2008~2026 全期 61%，還不如同一個候選池隨機挑 3 檔（63.5%）。只挑 3 檔太集中，93% 是剛好配合 2019~2025 的行情。
+      仍成立的是「市場狀態」：0050 在半年線下或大跌時，隨便挑都比平常容易贏 0050。下面保留上線後的實際記錄，繼續追蹤。</p>
+    ${trioLogHtml(t.log)}</details>`;
 }
 
 function trioLogHtml(lg) {
@@ -365,22 +359,32 @@ function trioLogHtml(lg) {
   return `<p style="margin-top:10px"><b>實際記錄</b>　<span class="note">已結束 ${lg.n_done} 組，贏 0050 ${lg.n_win} 組</span></p>
     <table class="kv"><tr><td>開始</td><td>3 檔（含股利報酬、下車原因）</td><td>0050</td><td>超額</td><td>結果</td></tr>${rows}</table>
     <p class="note">每月第一次啟用時自動記下名單與收盤價，之後每天用含股利的報酬追蹤：個股賺 20% 就換成 0050（扣 0.3% 換股成本），沒到就抱滿 250 個交易日（約 12 個月）；超額＝3 檔各自相對 0050 的平均。
-      * 不是在每月 11 日後第一個交易日開始（回測用那天），月中才跌破半年線。這是驗證回測 93% 唯一真正的方法，至少要累積 10 組以上才看得出來。</p>`;
+      * 不是在每月 11 日後第一個交易日開始（回測用那天），月中才跌破半年線。</p>`;
 }
 
 function crashHtml() {
   const k = state.data.crash;
   if (!k) return "";
-  const nm = (c) => { const x = state.data.stocks.find((s) => s.c === c); return `<a href="#${c}" data-open="${c}">${c} ${esc(x?.n || "")}</a>`; };
-  const head = k.active
-    ? `<span class="chip warn">已啟用</span> 0050 距一年高點 ${k.dd}%（跌超過 15%）：可以分 2~3 次加碼 0050，並買進下面這組股票（持有 12 個月）。`
-    : `<span class="chip neutral">未啟用</span> 0050 距一年高點 ${k.dd ?? "—"}%；跌超過 15% 才啟用。下面是目前符合條件的股票，先當觀察。`;
-  return `<div><b>大跌加碼名單</b>　<span class="note">${head}</span>
-    <p class="note">候選：營收預估上修中、市值 ≥ 100 億，目前 ${k.n ?? 0} 檔；依「外資持股 30%＋近 3 年營收成長 30%＋大跌前一年 beta 40%」排序取前 10。
-      回測 2018~2026 共 5 次大跌（持有 12 個月）：能算 beta 的 4 次都贏 0050（超額中位數 +18%，最差一次 +12.5%）。
-      大跌期間抗跌的、本益比便宜的、低 beta 防禦股，之後反而明顯落後，所以前瞻本益比位階只顯示、不篩選。
-      注意：只有 4~5 次樣本，而且都在半導體／AI 行情期間；高 beta 代表續跌時跌更多（持有期間回撤比 0050 深 5~12 個百分點），所以要分批、整組買、0050 仍是核心。
-      下表列出全部候選，標「前 10」的是建議買的那組。</p></div>`;
+  const st = k.stage, h = st?.hits || {};
+  const ymd = (d) => d ? `${d.slice(0, 4)}/${+d.slice(4, 6)}/${+d.slice(6, 8)}` : "";
+  const step = (lv, txt) => `<tr><td>${h[lv] ? `<span class="chip good">已觸發</span>` : `<span class="chip neutral">未到</span>`}</td><td>0050 距高點跌 ${lv}%</td><td>${h[lv] ? ymd(h[lv]) : "—"}</td><td>${txt}</td></tr>`;
+  let head;
+  if (k.active) head = `<span class="chip warn">已啟用</span> 0050 距一年高點 ${k.dd}%（${ymd(st?.start)} 觸發，最深 ${st?.deep ?? k.dd}%）。照下表分 3 批買前 10 檔；0050 回到距高點 5% 以內就全部換回 0050。`;
+  else if (st?.end) head = `<span class="chip neutral">未啟用</span> 上一次大跌（${ymd(st.start)} 觸發）已在 ${ymd(st.end)} 結束：0050 回到距高點 5% 以內，大跌名單應已換回 0050。目前距高點 ${k.dd ?? "—"}%。`;
+  else head = `<span class="chip neutral">未啟用</span> 0050 距一年高點 ${k.dd ?? "—"}%；跌超過 15% 才啟用。下面是目前符合條件的股票，先當觀察。`;
+  const plan = k.active ? `<table class="kv" style="margin-top:8px"><tr><td>狀態</td><td>條件</td><td>日期</td><td>動作</td></tr>
+      ${step("15", "第 1 批：預定金額的 1/3，買當天名單前 10 檔（等金額）")}
+      ${step("20", "第 2 批：再 1/3，用當天的名單")}
+      ${step("25", "第 3 批：最後 1/3；沒跌到就不買，這部分留在 0050")}
+      <tr><td>${st?.on ? `<span class="chip neutral">等待</span>` : `<span class="chip warn">賣出</span>`}</td><td>0050 回到距高點 5% 以內</td><td>${st?.end ? ymd(st.end) : "—"}</td><td>全部換回 0050（已買的不用跟著名單換股）</td></tr></table>` : "";
+  return `<div><b>大跌加碼名單</b>　<span class="note">${head}</span>${plan}
+    <p class="note">選股：營收預估上修中、市值 ≥ 100 億、成交金額夠，目前 ${k.n ?? 0} 檔；依「外資持股 30%＋近 3 年營收成長 30%＋大跌前一年 beta 40%」排序取前 10。
+      回測 2008~2026 共 9 次大跌（含股利，和觸發日買 0050 抱 18 個月比）：跌 15%／20%／25% 各買 1/3＋0050 回到距高點 5% 內換回，9 次贏 8 次，超額中位數約 +7~13%，最差一次約 −5%；
+      其中 2008~2017 的 4 次是規則定出來之前的資料（贏 3 次），2018 後 5 次全贏。觸發當天一次買完、抱 12 個月是 7/9、最差 −14%。
+      等 0050 站回均線、從低點反彈才買、按月分批，都比較差；移動停損會降低勝率；只買 3 檔最差情況明顯變糟。
+      大跌期間抗跌的、本益比便宜的、低 beta 防禦股，之後反而落後，所以前瞻本益比只顯示、不篩選。
+      注意：只有 9 次樣本，細部參數（權重、門檻）換一組結果就會變，重點是方向；路上最大回撤中位數約 −22%，2008 年那次約 −54%，0050 仍是核心、這部分當衛星。
+      分批門檻用 0050 收盤價（未含股利）判斷，和研究用的含股利版本可能差一兩天。下表列出全部候選，標「前 10」的是建議買的那組。</p></div>`;
 }
 
 // ---------- 第三步：持股監控
@@ -389,12 +393,9 @@ function holdAdvice(s) {
   const q = state.data.step2 || {}, k = state.data.crash || {};
   // 兩份名單分開寫，不互相覆蓋
   const acts = [];
-  const ti = (k.trio?.codes || []).indexOf(s.c);
-  if (ti >= 0) acts.push([k.trio.active ? "good" : "neutral",
-    `三檔組合第 ${ti + 1} 名${k.trio.active ? "（已啟用）：賺 20% 換 0050，最長 12 個月" : "（未啟用）"}`]);
   const ki = (k.codes || []).indexOf(s.c);
   if (ki >= 0) acts.push([k.active ? "good" : "neutral",
-    `大跌加碼名單第 ${ki + 1} 名${k.active ? "（已啟用）：分批買、持有 12 個月" : "（未啟用）"}`]);
+    `大跌加碼名單第 ${ki + 1} 名${k.active ? "（已啟用）：跌 15／20／25% 各買 1/3，0050 回到距高點 5% 內換回 0050" : "（未啟用）"}`]);
   const qi = (q.live || []).indexOf(s.c), qn = (q.live || []).length;
   if ((q.codes || []).includes(s.c)) {
     if (q.stopped?.[s.c]) acts.push(["warn", "選股名單：從買進後高點回落 30%，下車"]);
@@ -435,7 +436,7 @@ function renderStep3() {
   const list = state.data.stocks.filter((s) => state.watch.has(s.c));
   if (!list.length) { $("#watchInfo").innerHTML = '<div class="rulebox"><b>③ 持股監控</b><p class="note">還沒有持股。在任何清單點 ☆ 加入，這裡會每天檢查它還在不在選股名單、大跌名單。</p></div>'; return; }
   const chips = (xs) => xs.map(([c, t]) => `<span class="chip ${c}">${t}</span>`).join(" ") || NA;
-  $("#watchInfo").innerHTML = `<div class="rulebox"><b>③ 持股監控</b>　<span class="note">每天收盤後更新；三檔組合賺 20% 換 0050、最長 12 個月；選股名單符合條件就續抱、回落 30% 下車；大跌名單持有 12 個月</span>
+  $("#watchInfo").innerHTML = `<div class="rulebox"><b>③ 持股監控</b>　<span class="note">每天收盤後更新；選股名單符合條件就續抱、回落 30% 下車；大跌名單在 0050 回到距高點 5% 以內時全部換回 0050</span>
     <table class="kv watchkv" style="margin-top:8px"><tr><td>股票</td><td>買進價／日期</td><td>建議</td><td>下車提示</td><td>訊號</td></tr>
     ${list.map((s) => { const a = holdAdvice(s), cst = state.cost[s.c] || {}; return `<tr><td><a href="#${s.c}" data-open="${s.c}">${s.c} ${esc(s.n)}</a></td>
       <td class="costin"><input type="number" min="0" step="0.01" inputmode="decimal" placeholder="買進價" data-cost="${s.c}" value="${cst.p ?? ""}">
@@ -575,8 +576,9 @@ function renderHow() {
     <p><b>① 趨勢族群</b>：先看族群分數，只往下看前段族群。族群分數 = 族群內公司的近 3 月營收年增中位數 30%、營收創 12 個月新高的比例 25%、營收動能 20%、營收預估連續上修 ≥ 2 個月的比例 25%（族群之間排名）。
        「產業族群」用證交所產業分類；AI 等趨勢用人工整理的產業鏈環節（data/themes.json，可自行修改）。</p>
     <p><b>② 選股名單</b>：市值 ≥ 100 億、營收預估上修中、外資持股 ≥ 30%、近 3 年營收年成長 ≥ 10%，最多 10 檔；每月 11 日後檢查，不符合才換、從買進後高點回落 30% 提前下車，其餘資金放 0050。族群分數只當趨勢參考，不用來篩選（回測篩族群會錯過台積電等大型股）。</p>
-    <p><b>三檔組合</b>：0050 跌破半年線（120 日均線）時啟用。從「選股名單條件＋最新月營收創 12 個月新高」依外資持股 30%＋3 年營收成長 30%＋beta 40% 取前 3 檔、等金額買，各自賺 20% 就換成 0050，沒到就抱 12 個月。回測 15 個月份有 93% 贏 0050；半年線上時同樣做法只有 62%，所以平常不啟用。</p>
-    <p><b>大跌加碼名單</b>：0050 距一年高點跌超過 15% 時啟用。候選是營收上修中的大型股（市值 ≥ 100 億），依外資持股 30%＋3 年營收成長 30%＋大跌前一年 beta 40% 排序取前 10，分批買、持有 12 個月。</p>
+    <p><b>大跌加碼名單</b>：0050 距一年高點跌超過 15% 時啟用。候選是營收上修中的大型股（市值 ≥ 100 億），依外資持股 30%＋3 年營收成長 30%＋大跌前一年 beta 40% 排序取前 10；
+       0050 跌 15%／20%／25% 時各買 1/3（用當天名單），0050 回到距一年高點 5% 以內就全部換回 0050。2008~2026 九次大跌贏 0050 八次。</p>
+    <p><b>三檔組合（已停用）</b>：0050 在半年線下時挑 3 檔。2019~2025 回測 93%，但 2008~2017 驗證只有 44%，不再建議。</p>
     <p><b>③ 持股監控</b>：☆ 加入的股票每天檢查還在不在名單、有沒有從高點回落 30%。不設「賺多少就走」（回測較差）。</p>
     <h3>分數</h3>
     <table><tr><th>面向</th><th>權重</th><th>內容</th></tr>
@@ -595,9 +597,9 @@ function renderHow() {
     <ul>
       <li>有效：營收預估上修、營收創新高、外資持股比例高、近 3 年營收長期成長、分散 10~20 檔、每季換股。</li>
       <li>無效或更差：技術面（站上季線、支撐、乖離）、籌碼變化（外資 4 週變化、法人買賣超）、先篩族群、停利／停損／過熱出場、判斷多空再進場、逢低買、平常時期用本益比位階挑買點。</li>
-      <li>市場狀態比挑哪檔更重要：0050 在半年線下、距高點超過 15%、近一年下跌時，品質好的 3 檔組合大多贏 0050；接近高點、波動低、台積電領漲時，勝率只有 4~5 成。</li>
+      <li>市場狀態比挑哪檔更重要：0050 在半年線下、距高點超過 15%、近一年下跌時，候選池隨便挑都比平常容易贏 0050（6~7 成）；接近高點、波動低、台積電領漲時，勝率只有 4~5 成。用排序只挑 3 檔沒有比隨機好（2008~2017 驗證）。</li>
       <li>單檔勝率：任意大型股 12 個月贏 0050 只有 32%；只看本益比便宜 41%；營收上修＋創新高＋外資持股高＋長期成長約 6 成。停損會讓勝率變低，賺 20% 就走、前瞻本益比回到平均就賣會讓勝率變高。</li>
-      <li>大跌時（5 次）：抗跌股、低 beta 防禦股、只挑便宜、外資逆勢加碼的股票，之後 12 個月都落後 0050；高 beta、電子股、外資持股高、營收創新高的反彈最強。</li>
+      <li>大跌時（2008~2026 共 9 次）：抗跌股、低 beta 防禦股、只挑便宜、外資逆勢加碼的股票，之後大多落後 0050；營收上修＋外資持股高＋長期成長＋高 beta 的 10 檔最穩（9 次贏 7~8 次）。上車用價位分批（跌 15／20／25%）最好，等站回均線或反彈才買最差。</li>
       <li>單一個股贏 0050 的機率幾乎都 &lt; 50%；組合能贏是因為少數大贏家把平均拉高，所以要買一組、不要押單檔。</li>
       <li>仍不保證：大約一半的月份會輸 0050，0050 仍建議當核心。</li>
     </ul>
