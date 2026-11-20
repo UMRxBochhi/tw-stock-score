@@ -28,7 +28,7 @@ jobs:
       - name: 補每日融資
         run: python scripts/backfill_margin.py
         env:
-          BACKFILL_MINUTES: "15"   # 第一輪先短跑確認格式，之後改回 160
+          BACKFILL_MINUTES: "160"
       - name: commit
         if: always()
         run: |
