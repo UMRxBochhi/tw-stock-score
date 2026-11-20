@@ -1,0 +1,34 @@
+name: timing
+
+# 大跌時的上車／下車時機與檔數（scripts/research_timing.py）；改腳本 push 就自動跑
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [scripts/research_timing.py]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: timing
+  cancel-in-progress: false
+
+jobs:
+  crash:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python scripts/research_timing.py
+      - name: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/research_timing.json
+          git diff --cached --quiet || git commit -m "research timing: $(TZ=Asia/Taipei date +%F)"
+          for i in 1 2 3; do git pull --rebase -X theirs && git push && break; sleep 10; done

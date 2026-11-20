@@ -474,6 +474,9 @@ def main():
                        "hit": sum(s[c]["ex"] > 0 for c in pick) / len(pick), "pick": pick})
         return rs
 
+    for ep in episodes:              # 2006 年那次沒有外資持股／營收資料，快照是空的
+        ep["entries"] = [i for i in ep["entries"] if len(snaps.get(i) or {}) >= 20]
+    episodes = [ep for ep in episodes if ep["entries"]]
     # 隨機基準：同一進場點，從全部大型股隨機挑 10 檔，2000 次
     rand_ep = {}
     for ep in episodes:
