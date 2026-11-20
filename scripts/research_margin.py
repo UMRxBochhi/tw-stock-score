@@ -169,7 +169,7 @@ def main():
     chg = {}
     for lo, hi, name in ((-9, -0.15, "20 日減少 > 15%"), (-0.15, -0.05, "減少 5~15%"), (-0.05, 0.05, "±5%"), (0.05, 9, "增加 > 5%")):
         ii = [i for i in range(20, N) if tbal[i] and tbal[i - 20] and lo <= tbal[i] / tbal[i - 20] - 1 < hi]
-        chg[name] = {hn: stat([fwd50(i, h) for i in ii if i + h < N], [dates[i] for i in ii if i + h < N]) for hn, h in ("3 個月", 63), ("12 個月", 250)}
+        chg[name] = {hn: stat([fwd50(i, h) for i in ii if i + h < N], [dates[i] for i in ii if i + h < N]) for hn, h in (("3 個月", 63), ("12 個月", 250))}
         chg[name]["天數"] = len(ii)
     out["上市融資餘額 20 日變化 → 0050"] = chg
 
