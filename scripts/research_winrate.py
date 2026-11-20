@@ -188,7 +188,8 @@ def main():
                         "單檔超額中位數": q([r - 1 for _, r in xs], 0.5),
                         "最差 10%": q([r - 1 for _, r in xs], 0.1),
                         "新訊號數": len(ns), "新訊號勝率": pct([r > 1 for _, r in ns]),
-                        "前段/後段單檔勝率": f"{pct([r > 1 for i, r in xs if dates[i] < split])} / {pct([r > 1 for i, r in xs if dates[i] >= split])}",
+                        "2008~17 單檔勝率": pct([r > 1 for i, r in xs if dates[i] < "20180101"]),
+                        "前段/後段單檔勝率": f"{pct([r > 1 for i, r in xs if '20180101' <= dates[i] < split])} / {pct([r > 1 for i, r in xs if dates[i] >= split])}",
                         "組合勝率（每月買全部符合的）": pct([r > 1 for r in port]), "組合月數": len(port),
                         "平均每月檔數": round(len(xs) / max(1, len(by_m)), 1)}
         win[k] = row
@@ -462,17 +463,27 @@ def main():
                 wins = sum(sum(rr[c] for c in rng.sample(ks, 3)) / 3 > 1 for _ in range(300))
                 obs.append({"i": i, "pool": pn, "rank": "隨機 3 檔", "exit": en, "st": st, "r": None, "pwin": wins / 300})
     u.log(f"三檔組合觀察數 {len(obs)}")
+    # 網站上線的規則逐月明細（半年線下＋網站條件＋創新高＋網站版排序＋賺 20% 轉 0050）
+    live = [o for o in obs if o["pool"] == "網站條件＋創新高" and o["rank"] == "外資30＋成長30＋beta40（網站版：高點前 beta）"
+            and o["exit"] == "賺 20% 就轉 0050" and o["st"]["0050 半年線"] == "半年線下"]
+    out["網站三檔規則逐月"] = [{"日期": dates[o["i"]], "名單": o["pick"], "相對 0050": round((o["r"] - 1) * 100, 1)} for o in live]
+    u.log("網站三檔規則逐月: " + json.dumps(out["網站三檔規則逐月"], ensure_ascii=False))
     front_end = "20230101"
+    OLD_END = "20180101"     # 2008~2017：2026-11 往前補的資料，規則都是用 2018~ 定的，這段當獨立驗證期
 
     def summ(xs):
         if xs[0]["r"] is None:
             return {"月數": len(xs), "勝率": round(sum(o["pwin"] for o in xs) / len(xs) * 100, 1)}
         rs = [o["r"] for o in xs]
-        fr = [o["r"] for o in xs if dates[o["i"]] < front_end]
+        od = [o["r"] for o in xs if dates[o["i"]] < OLD_END]
+        fr = [o["r"] for o in xs if OLD_END <= dates[o["i"]] < front_end]
         bk = [o["r"] for o in xs if dates[o["i"]] >= front_end]
         return {"月數": len(rs), "年份數": len({dates[o["i"]][:4] for o in xs}),
                 "勝率": pct([r > 1 for r in rs]), "超額平均": round((sum(rs) / len(rs) - 1) * 100, 1),
                 "超額中位數": q([r - 1 for r in rs], 0.5), "最差": round((min(rs) - 1) * 100, 1),
+                "驗證期勝率（2008~17）": pct([r > 1 for r in od]), "驗證期月數": len(od),
+                "驗證期最差": round((min(od) - 1) * 100, 1) if od else None,
+                "驗證期超額平均": round((sum(od) / len(od) - 1) * 100, 1) if od else None,
                 "前段勝率（2019~22）": pct([r > 1 for r in fr]), "前段月數": len(fr),
                 "後段勝率（2023~）": pct([r > 1 for r in bk]), "後段月數": len(bk)}
 
@@ -545,7 +556,8 @@ def main():
                     row[f"三檔｜{en}"] = {"月數": len(ts), "年份數": len({dates[i][:4] for i, _ in ts}),
                                          "勝率": pct([r > 1 for _, r in ts]), "超額平均": round((sum(r for _, r in ts) / len(ts) - 1) * 100, 1),
                                          "最差": round((min(r for _, r in ts) - 1) * 100, 1),
-                                         "前/後段勝率": f"{pct([r > 1 for i, r in ts if dates[i] < front_end])} / {pct([r > 1 for i, r in ts if dates[i] >= front_end])}"} if ts else None
+                                         "2008~17 月數/勝率/最差": (lambda a: f"{len(a)} / {pct([r > 1 for r in a])} / {round((min(a) - 1) * 100, 1) if a else None}")([r for i, r in ts if dates[i] < OLD_END]),
+                                         "前/後段勝率": f"{pct([r > 1 for i, r in ts if OLD_END <= dates[i] < front_end])} / {pct([r > 1 for i, r in ts if dates[i] >= front_end])}"} if ts else None
                 combo7.append(row)
     out["組合條件×本益比位階"] = combo7
     u.log("三檔組合 全部: " + json.dumps(three["全部月份（不分市場狀態）"][:8], ensure_ascii=False)[:2500])
@@ -572,7 +584,7 @@ def build_snaps(dates, close, val, G, E, months):
     revh = json.loads((HIST / "rev.json").read_text(encoding="utf-8"))
     for code, h in u.load("fundamentals.json", {}).get("rev_hist", {}).items():
         revh.setdefault(code, {}).update(h)
-    pe_m = u.load("pe_monthly.json", {})
+    pe_m = u.load_pe_all()
     pe_keys = sorted(pe_m)
     rev_now = u.load("fundamentals.json", {}).get("revenue", {})
     IND = {}

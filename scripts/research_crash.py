@@ -175,7 +175,7 @@ def main():
     revh = json.loads((HIST / "rev.json").read_text(encoding="utf-8"))
     for code, h in u.load("fundamentals.json", {}).get("rev_hist", {}).items():
         revh.setdefault(code, {}).update(h)
-    pe_m = u.load("pe_monthly.json", {})
+    pe_m = u.load_pe_all()
     pe_keys = sorted(pe_m)
     rev_now = u.load("fundamentals.json", {}).get("revenue", {})
     incp = HIST / "inc.json.gz"

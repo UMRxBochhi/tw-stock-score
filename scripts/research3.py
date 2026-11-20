@@ -23,6 +23,7 @@ import research as R    # noqa: E402
 
 COST = 0.005
 SPLIT = "20230615"
+OLD_END = "20180101"   # 2008~2017 是 2026-11 往前補的資料：規則都是用 2018~ 定的，這段當獨立驗證期
 MIN_CAP = 1e10     # 市值至少 100 億（使用者條件）；沒有市值資料的時間點不套用
 
 
@@ -151,7 +152,7 @@ def main():
             cap_ok_dates.add(t)
     u.log(f"有市值資料的時間點 {len(cap_ok_dates)} / {len(records)}")
 
-    pe_m = u.load("pe_monthly.json", {})
+    pe_m = u.load_pe_all()
     pe_keys = sorted(pe_m)
     _rev0 = u.load("fundamentals.json", {}).get("revenue", {})
     _ind0, _fc = {}, {}
@@ -421,7 +422,7 @@ def main():
             dd = 0.0
             prev = {}
             rows = []
-            seg = {"train": [1.0, 1.0, 0], "test": [1.0, 1.0, 0]}
+            seg = {"old": [1.0, 1.0, 0], "train": [1.0, 1.0, 0], "test": [1.0, 1.0, 0]}
             years = {}
             for idx in reb:
                 t, snap = records[idx]
@@ -440,7 +441,7 @@ def main():
                 peak = max(peak, eq)
                 dd = min(dd, eq / peak - 1)
                 rows.append((t, r, mk["hold"], to))
-                k = "train" if t < SPLIT else "test"
+                k = "old" if t < OLD_END else "train" if t < SPLIT else "test"
                 seg[k][0] *= 1 + r
                 seg[k][1] *= 1 + mk["hold"]
                 seg[k][2] += 1
@@ -455,6 +456,7 @@ def main():
             cg = lambda f, y: round((f ** (1 / y) - 1) * 100, 1) if y > 0 else None
             out["portfolios"][f"{vname}｜前 {N} 名"] = {
                 "年化": cg(eq, yrs), "0050 年化": cg(em, yrs),
+                "2008-2017 年化": cg(seg["old"][0], seg["old"][2] / 12), "2008-2017 0050": cg(seg["old"][1], seg["old"][2] / 12),
                 "2018-2023 年化": cg(seg["train"][0], seg["train"][2] / 12), "2018-2023 0050": cg(seg["train"][1], seg["train"][2] / 12),
                 "2023-2026 年化": cg(seg["test"][0], seg["test"][2] / 12), "2023-2026 0050": cg(seg["test"][1], seg["test"][2] / 12),
                 "每月贏 0050 比例": round(sum(r > m for _, r, m, _ in rows) / len(rows) * 100, 1),
@@ -469,7 +471,7 @@ def main():
         slots = []          # 每檔：{"c", "v" 市值占比, "g" 進場後累積報酬倍數, "pk" 最高倍數, "mo" 持有月數}
         eq = em = pk_eq = 1.0
         dd = 0.0
-        seg = {"train": [1.0, 1.0, 0], "test": [1.0, 1.0, 0]}
+        seg = {"old": [1.0, 1.0, 0], "train": [1.0, 1.0, 0], "test": [1.0, 1.0, 0]}
         n_m = n_sell = 0
         hold_mo = []
         exit_g = []
@@ -517,13 +519,14 @@ def main():
             wins += r > mk["hold"]
             pk_eq = max(pk_eq, eq)
             dd = min(dd, eq / pk_eq - 1)
-            k = "train" if t < SPLIT else "test"
+            k = "old" if t < OLD_END else "train" if t < SPLIT else "test"
             seg[k][0] *= 1 + r
             seg[k][1] *= 1 + mk["hold"]
             seg[k][2] += 1
             n_m += 1
         cg = lambda f, y: round((f ** (1 / y) - 1) * 100, 1) if y > 0 else None
         return {"年化": cg(eq, n_m / 12), "0050 年化": cg(em, n_m / 12),
+                "2008-2017 年化": cg(seg["old"][0], seg["old"][2] / 12), "2008-2017 0050": cg(seg["old"][1], seg["old"][2] / 12),
                 "2018-2023 年化": cg(seg["train"][0], seg["train"][2] / 12), "2018-2023 0050": cg(seg["train"][1], seg["train"][2] / 12),
                 "2023-2026 年化": cg(seg["test"][0], seg["test"][2] / 12), "2023-2026 0050": cg(seg["test"][1], seg["test"][2] / 12),
                 "每月贏 0050 比例": round(wins / max(1, n_m) * 100, 1), "最大回撤": round(dd * 100, 1),
@@ -562,7 +565,7 @@ def main():
         w = {}
         eq = em = pk = 1.0
         dd = 0.0
-        seg = {"train": [1.0, 1.0, 0], "test": [1.0, 1.0, 0]}
+        seg = {"old": [1.0, 1.0, 0], "train": [1.0, 1.0, 0], "test": [1.0, 1.0, 0]}
         n_m = wins = 0
         tos = []
         n_ind = []
@@ -607,13 +610,14 @@ def main():
             wins += r > mk["hold"]
             pk = max(pk, eq)
             dd = min(dd, eq / pk - 1)
-            k = "train" if t < SPLIT else "test"
+            k = "old" if t < OLD_END else "train" if t < SPLIT else "test"
             seg[k][0] *= 1 + r
             seg[k][1] *= 1 + mk["hold"]
             seg[k][2] += 1
             n_m += 1
         cg = lambda f, y: round((f ** (1 / y) - 1) * 100, 1) if y > 0 else None
         return {"年化": cg(eq, n_m / 12), "0050 年化": cg(em, n_m / 12),
+                "2008-2017 年化": cg(seg["old"][0], seg["old"][2] / 12), "2008-2017 0050": cg(seg["old"][1], seg["old"][2] / 12),
                 "2018-2023 年化": cg(seg["train"][0], seg["train"][2] / 12), "2018-2023 0050": cg(seg["train"][1], seg["train"][2] / 12),
                 "2023-2026 年化": cg(seg["test"][0], seg["test"][2] / 12), "2023-2026 0050": cg(seg["test"][1], seg["test"][2] / 12),
                 "每月贏 0050 比例": round(wins / max(1, n_m) * 100, 1), "最大回撤": round(dd * 100, 1),
@@ -632,7 +636,7 @@ def main():
         w = {}
         eq = em = pk = 1.0
         dd = 0.0
-        seg = {"train": [1.0, 1.0, 0], "test": [1.0, 1.0, 0]}
+        seg = {"old": [1.0, 1.0, 0], "train": [1.0, 1.0, 0], "test": [1.0, 1.0, 0]}
         n_m = wins = zero = 0
         n_q, sat = [], []
         for n, idx in enumerate(reb):
@@ -679,13 +683,14 @@ def main():
             wins += r > mk["hold"]
             pk = max(pk, eq)
             dd = min(dd, eq / pk - 1)
-            k = "train" if t < SPLIT else "test"
+            k = "old" if t < OLD_END else "train" if t < SPLIT else "test"
             seg[k][0] *= 1 + r
             seg[k][1] *= 1 + mk["hold"]
             seg[k][2] += 1
             n_m += 1
         cg = lambda f, y: round((f ** (1 / y) - 1) * 100, 1) if y > 0 else None
         return {"年化": cg(eq, n_m / 12), "0050 年化": cg(em, n_m / 12),
+                "2008-2017 年化": cg(seg["old"][0], seg["old"][2] / 12), "2008-2017 0050": cg(seg["old"][1], seg["old"][2] / 12),
                 "2018-2023 年化": cg(seg["train"][0], seg["train"][2] / 12), "2018-2023 0050": cg(seg["train"][1], seg["train"][2] / 12),
                 "2023-2026 年化": cg(seg["test"][0], seg["test"][2] / 12), "2023-2026 0050": cg(seg["test"][1], seg["test"][2] / 12),
                 "每月贏 0050 比例": round(wins / max(1, n_m) * 100, 1), "最大回撤": round(dd * 100, 1),
@@ -775,7 +780,8 @@ def main():
             return {"次數": len(xs), "組合贏 0050 機率": round(sum(x > 0 for x in exs) / len(exs) * 100, 1),
                     "平均超額（3 個月）": round(sum(exs) / len(exs) * 100, 2), "t": tt and round(tt, 2),
                     "組合內個股贏 0050 比例": round(sum(o["hit"] for o in xs) / len(xs) * 100, 1),
-                    "2018-2023 次數/勝率": (lambda a: f"{len(a)} / {round(sum(o['ex'] > 0 for o in a) / len(a) * 100) if a else '—'}%")([o for o in xs if o["t"] < SPLIT]),
+                    "2008-2017 次數/勝率": (lambda a: f"{len(a)} / {round(sum(o['ex'] > 0 for o in a) / len(a) * 100) if a else '—'}%")([o for o in xs if o["t"] < OLD_END]),
+                    "2018-2023 次數/勝率": (lambda a: f"{len(a)} / {round(sum(o['ex'] > 0 for o in a) / len(a) * 100) if a else '—'}%")([o for o in xs if OLD_END <= o["t"] < SPLIT]),
                     "2023-2026 次數/勝率": (lambda a: f"{len(a)} / {round(sum(o['ex'] > 0 for o in a) / len(a) * 100) if a else '—'}%")([o for o in xs if o["t"] >= SPLIT])}
         res["全部"] = summ(obs, "全部")
         for dim in (obs[0]["state"] if obs else {}):
@@ -894,6 +900,7 @@ def main():
     ys = sorted(x["年化"] for x in rr)
     rob["隨機挑 20 檔大型股（同樣每檔 5%、每產業 2 檔、其餘 0050），20 次"] = {
         "年化中位數": ys[len(ys) // 2], "年化最低/最高": f"{ys[0]} / {ys[-1]}",
+        "2008-2017 中位數": sorted((x["2008-2017 年化"] or -99) for x in rr)[len(rr) // 2],
         "2018-2023 中位數": sorted(x["2018-2023 年化"] for x in rr)[len(rr) // 2],
         "2023-2026 中位數": sorted(x["2023-2026 年化"] for x in rr)[len(rr) // 2],
         "0050 年化": rr[0]["0050 年化"]}
