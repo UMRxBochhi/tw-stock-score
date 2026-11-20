@@ -1,0 +1,40 @@
+name: margin_research
+
+# 融資維持率研究（scripts/research_margin.py）。改腳本 push 就跑；融資回補每輪結束也會觸發（資料沒補完時腳本會直接結束）
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [scripts/research_margin.py]
+  workflow_run:
+    workflows: [backfill_margin]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: margin_research
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python scripts/research_margin.py
+      - name: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          [ -f data/research_margin.json ] || exit 0
+          git add data/research_margin.json
+          git diff --cached --quiet || git commit -m "research margin: $(TZ=Asia/Taipei date +%F)"
+          for i in 1 2 3; do git pull --rebase -X theirs && git push && break; sleep 10; done
