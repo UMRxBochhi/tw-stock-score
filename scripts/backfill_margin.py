@@ -12,7 +12,7 @@ import os
 import sys
 import threading
 import time
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 
 os.environ.setdefault("MAX_RWD_CALLS", "8000")
@@ -41,57 +41,8 @@ def out_of_time():
     return time.time() - T0 > TIME_BUDGET
 
 
-def margin_twse(t):
-    js = u.get_json("https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN",
-                    {"date": t, "selectType": "ALL", "response": "json"}, rwd=True)
-    if js is None:
-        return None
-    out = {}
-    tb = u.find_table(js, ["代號", "今日餘額"])
-    if tb:
-        f, rows = tb
-        bal = [i for i, x in enumerate(f) if "今日餘額" in x]
-        lim = [i for i, x in enumerate(f) if "限額" in x]
-        for r in rows:
-            c = str(r[0]).strip()
-            if u.is_stock(c) or c == "0050":
-                b = u.num(r[bal[0]])
-                if b is not None:
-                    out[c] = [b, u.num(r[lim[0]]) if lim else None]
-    sm = u.find_table(js, ["項目", "今日餘額"])
-    if sm:
-        f, rows = sm
-        ib = u.col(f, "今日餘額")
-        for r in rows:
-            name = str(r[0])
-            if "融資金額" in name:
-                out["__amt"] = u.num(r[ib])
-            elif name.startswith("融資"):
-                out["__bal"] = u.num(r[ib])
-    return out
-
-
-def margin_tpex(t):
-    js = u.tpex_json("margin/balance", datetime.strptime(t, "%Y%m%d").date())
-    if js is None:
-        return None
-    tb = u.find_table(js, ["代號"])
-    if not tb:
-        return {}
-    f, rows = tb
-    fs = [str(x) for x in f]
-    ib = u.col(fs, "資餘額", exclude=("前",))
-    il = u.col(fs, "資限額")
-    if ib is None:
-        return {}
-    out = {}
-    for r in rows:
-        c = str(r[0]).strip()
-        if u.is_stock(c):
-            b = u.num(r[ib])
-            if b is not None:
-                out[c] = [b, u.num(r[il]) if il is not None else None]
-    return out
+margin_twse = u.fetch_margin           # 抓取函式放在 update.py（每日更新也用）
+margin_tpex = u.fetch_margin_otc
 
 
 def worker(prefix, days, fetch, nd_key, min_n):

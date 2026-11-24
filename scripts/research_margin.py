@@ -1,7 +1,7 @@
 # 融資維持率研究：大盤融資維持率、個股融資維持率（推估）能不能當買點／避開訊號
 """
 資料：data/hist/mgd_*（上市每日融資餘額＋融資金額）、mgdo_*（上櫃每日融資餘額），2006 起（scripts/backfill_margin.py）
-- 大盤融資維持率（上市）＝ Σ 個股融資餘額 × 收盤價 ÷ 上市融資金額。分子只算股票＋0050，其他 ETF 的融資沒算進分子，數字會略低於新聞報的值
+- 大盤融資維持率（上市）＝ Σ 個股融資餘額 × 收盤價 ÷ 上市融資金額。分子只算股票＋0050，其他 ETF 的融資沒算進分子，數字會略低於新聞報的值（2026-11-24 修正：之前把「曾經上櫃、後來轉上市」的股票整段排除，近年數字偏低約 10 個百分點）
 - 個股融資維持率（推估）：融資餘額增加的那天，用當天價格算進融資平均成本；減少時成本不變；餘額歸零就重算。
   維持率 ＝ 價格 ÷（平均成本 × 融資成數），上市成數 60%、上櫃 50%。價格用含股利還原的指數，所以除權息不會讓維持率掉下去（實際上會）
 - 報酬都含股利；個股看相對 0050 的超額；「2008~17」是規則定出來之前的資料，可當獨立驗證
@@ -45,25 +45,16 @@ def stat(rs, ds=None):
     return o
 
 
-def main():
-    if not (u.DATA / "hist" / "backfill_margin_done.json").exists() and not os.environ.get("MARGIN_FORCE"):
-        u.log("融資資料還沒補完（沒有 backfill_margin_done.json），先不跑")
-        return
-    dates, close, val = W.load_prices()
+def load_margin(dates, close):
+    """回傳 (bal 代號->每日融資張數, otc 上櫃代號, amt 上市融資金額仟元, tbal 上市融資張數, M 大盤維持率%)"""
     N = len(dates)
     idx = {t: i for i, t in enumerate(dates)}
-    G = {c: W.growth(a, dates, c) for c, a in close.items()}
-    E = G["0050"]
-    for i in range(1, N):
-        if E[i] is None:
-            E[i] = E[i - 1]
-    u.log(f"交易日 {N}（{dates[0]}~{dates[-1]}）")
-
     # ---- 每日融資
     bal = {}            # 代號 -> [張數 or None]*N
     otc = set()
     amt = [None] * N    # 上市融資金額（仟元）
     tbal = [None] * N   # 上市融資餘額（張）
+    mv = [0.0] * N      # 上市融資餘額市值（只用當天上市的融資資料；轉上市的股票之前在上櫃，不能用「曾經上櫃」排除）
     for pre in ("mgd", "mgdo"):
         for ym in u.hist_months(pre):
             for t, rows in u.hist_read(pre, ym).items():
@@ -79,16 +70,32 @@ def main():
                         bal.setdefault(c, [None] * N)[i] = v[0]
                         if pre == "mgdo":
                             otc.add(c)
-    u.log(f"有融資資料的股票 {len(bal)}，上市融資金額天數 {sum(1 for x in amt if x)}")
+                        elif c in close and close[c][i]:
+                            mv[i] += v[0] * 1000 * close[c][i]
 
-    # ---- 1. 大盤融資維持率
     M = [None] * N
     for i in range(N):
         if not amt[i]:
             continue
-        mv = sum(b[i] * 1000 * close[c][i] for c, b in bal.items()
-                 if c not in otc and b[i] and c in close and close[c][i])
-        M[i] = mv / (amt[i] * 1000) * 100 if amt[i] > 0 else None
+        M[i] = mv[i] / (amt[i] * 1000) * 100 if amt[i] > 0 else None
+    return bal, otc, amt, tbal, M
+
+
+def main():
+    if not (u.DATA / "hist" / "backfill_margin_done.json").exists() and not os.environ.get("MARGIN_FORCE"):
+        u.log("融資資料還沒補完（沒有 backfill_margin_done.json），先不跑")
+        return
+    dates, close, val = W.load_prices()
+    N = len(dates)
+    idx = {t: i for i, t in enumerate(dates)}
+    G = {c: W.growth(a, dates, c) for c, a in close.items()}
+    E = G["0050"]
+    for i in range(1, N):
+        if E[i] is None:
+            E[i] = E[i - 1]
+    u.log(f"交易日 {N}（{dates[0]}~{dates[-1]}）")
+
+    bal, otc, amt, tbal, M = load_margin(dates, close)
     out = {"說明": __doc__.strip(), "期間": f"{dates[0]}~{dates[-1]}"}
     out["大盤維持率每年"] = {}
     for y in sorted({t[:4] for t in dates}):

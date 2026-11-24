@@ -1664,6 +1664,7 @@ def build_output(prices, names, t86, bw_latest, pe_monthly, fund, index, scores,
         "groups": (gr_ := theme_stats({"產業": {g: [x["c"] for x in stocks if x["ind"] == g and x["s"].get("score") is not None]
                                                 for g in {x["ind"] for x in stocks if x["ind"]}}}, stocks, qf_latest).get("產業", [])),
         "step2": quarter_plan(stocks, prices, last, fund),
+        "margin": _safe(lambda: margin_info(stocks, prices, last), "融資維持率"),   # 先算，大跌名單要用 mg_use
         "crash": crash_plan(stocks, prices, last, pe_monthly, fund),
         "mkt_pe": _safe(lambda: market_pe(stocks, pe_monthly, fund), "大盤本益比"),
         "picks": {rid: top_picks([(x["c"], x["m"]) for x in stocks], rid) for rid in RULES},
@@ -2235,12 +2236,126 @@ def crash_plan(stocks, prices, last, pe_monthly, fund):
             "n": len(rows), "codes": [x["c"] for x in rows[:10]], "all": [x["c"] for x in rows],
             "rows": [{"c": x["c"], "sc": x["m"]["crash_sc"], "zf": x["m"].get("fpe_zf"), "qf": x["m"].get("qf"),
                       "cagr3": x["m"].get("cagr3"), "beta": x["m"]["crash_beta"], "cap": round((x["m"].get("cap") or 0) / 1e8),
-                      "up": x["m"].get("rev_up_n")}
+                      "up": x["m"].get("rev_up_n"), "mg": x["m"].get("mg_use")}
                      for x in rows[:10]],
             "trio": (trio := {"active": below, "p50": round(e50[-1], 2), "ma120": round(ma120, 2) if ma120 else None,
                               "gap": round((e50[-1] / ma120 - 1) * 100, 1) if ma120 else None,
                               "n": len(tpool), "codes": [x["c"] for x in tpool[:3]], "all": [x["c"] for x in tpool],
                               "log": _safe(lambda: trio_track(below, [x["c"] for x in tpool[:3]], seen, ds), "三檔組合記錄")})}
+
+
+# ---------------------------------------------------------------- 融資（research_margin.py / research_margin_timing.py）
+# 大盤融資維持率 < 130%：2006~2026 之後 12 個月 0050 上漲 99.5%（兩段期間都成立），但 3 個月內常常還會再跌。
+# 個股融資占股本 ≥ 10%：12 個月贏 0050 只有 23%（全部大型股平均約 37%），≥ 6% 也偏差 → 大跌名單標示警示
+MG_WARN = 6.0
+
+
+def fetch_margin(t: str):
+    """上市每日融資：{代號: [融資餘額張, 限額張], "__amt": 融資金額仟元, "__bal": 融資餘額張}"""
+    js = get_json("https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN",
+                  {"date": t, "selectType": "ALL", "response": "json"}, rwd=True)
+    if js is None:
+        return None
+    out = {}
+    tb = find_table(js, ["代號", "今日餘額"])
+    if tb:
+        f, rows = tb
+        bal = [i for i, x in enumerate(f) if "今日餘額" in x]
+        lim = [i for i, x in enumerate(f) if "限額" in x]
+        for r in rows:
+            c = str(r[0]).strip()
+            if is_stock(c) or c == "0050":
+                b = num(r[bal[0]])
+                if b is not None:
+                    out[c] = [b, num(r[lim[0]]) if lim else None]
+    sm = find_table(js, ["項目", "今日餘額"])
+    if sm:
+        f, rows = sm
+        ib = col(f, "今日餘額")
+        for r in rows:
+            name = str(r[0])
+            if "融資金額" in name:
+                out["__amt"] = num(r[ib])
+            elif name.startswith("融資"):
+                out["__bal"] = num(r[ib])
+    return out
+
+
+def fetch_margin_otc(t: str):
+    """上櫃每日融資：{代號: [融資餘額張, 限額張]}"""
+    js = tpex_json("margin/balance", datetime.strptime(t, "%Y%m%d").date())
+    if js is None:
+        return None
+    tb = find_table(js, ["代號"])
+    if not tb:
+        return {}
+    f, rows = tb
+    fs = [str(x) for x in f]
+    ib = col(fs, "資餘額", exclude=("前",))
+    il = col(fs, "資限額")
+    if ib is None:
+        return {}
+    out = {}
+    for r in rows:
+        c = str(r[0]).strip()
+        if is_stock(c):
+            b = num(r[ib])
+            if b is not None:
+                out[c] = [b, num(r[il]) if il is not None else None]
+    return out
+
+
+def update_margin(prices):
+    """最近幾個交易日的融資寫進 data/hist/mgd_*、mgdo_*（當天的融資晚上才公布，通常隔天補到）"""
+    if not (DATA / "hist").exists() or not prices:
+        return
+    for prefix, fetch, min_n in (("mgd", fetch_margin, 100), ("mgdo", fetch_margin_otc, 50)):
+        for t in sorted(prices)[-6:]:
+            cur = hist_read(prefix, t[:6])
+            if t in cur:
+                continue
+            res = _safe(lambda: fetch(t), "融資 " + prefix)
+            if res and len([c for c in res if not c.startswith("__")]) >= min_n:
+                cur[t] = res
+                hist_write(prefix, t[:6], cur)
+                log(f"  {prefix} {t} ok ({len(res)})")
+
+
+def margin_info(stocks, prices, last):
+    """大盤融資維持率（上市；近一年每天）＋每檔融資占股本（m["mg_use"]，%）"""
+    if not (DATA / "hist").exists():
+        return None
+    d0 = datetime.strptime(last, "%Y%m%d")
+    yms = sorted({(d0 - timedelta(days=30 * i)).strftime("%Y%m") for i in range(13)})
+    mg, mgo, px = {}, {}, {}
+    for ym in yms:
+        mg.update(hist_read("mgd", ym))
+        mgo.update(hist_read("mgdo", ym))
+        px.update(hist_read("px", ym))
+    px.update(prices)
+    ser = []
+    for t in sorted(mg):
+        rows, p = mg[t], px.get(t) or {}
+        if not rows.get("__amt") or not p:
+            continue
+        mv = sum(v[0] * 1000 * p[c][0] for c, v in rows.items()
+                 if not c.startswith("__") and v and v[0] and (p.get(c) or [None])[0])
+        ser.append([t, round(mv / (rows["__amt"] * 1000) * 100, 1)])
+    # 個股：各自最新一天的融資餘額 ÷ 股數（市值 ÷ 最新收盤）
+    lt = max(mg) if mg else None
+    lo = max(mgo) if mgo else None
+    pl = prices.get(last) or {}
+    for x in stocks:
+        c, m = x["c"], x["m"]
+        v = (mg.get(lt) or {}).get(c) or (mgo.get(lo) or {}).get(c)
+        cl = (pl.get(c) or [None])[0]
+        m["mg_use"] = round(v[0] * 1000 / (m["cap"] / cl) * 100, 1) if v and v[0] is not None and cl and m.get("cap") else None
+    if not ser:
+        return None
+    lv = ser[-1][1]
+    return {"date": ser[-1][0], "ratio": lv, "min1y": min(r for _, r in ser), "ser": ser[-250:],
+            "zone": "lt125" if lv < 125 else "lt130" if lv < 130 else "lt140" if lv < 140 else "hot" if lv >= 170 else "mid",
+            "otc_date": lo, "warn": MG_WARN}
 
 
 # ---------------------------------------------------------------- 三檔組合實際記錄（驗證回測的 93%）
@@ -2325,6 +2440,8 @@ def main():
     log("== 上櫃收盤行情、三大法人")
     merge_otc(prices, fetch_prices_otc, "price", otc_nd["px"], names)
     merge_otc(t86, fetch_t86_otc, "t86", otc_nd["t86"])
+    log("== 融資（大盤維持率、融資占股本）")
+    _safe(lambda: update_margin(prices), "融資")
     log("== 本益比/殖利率（最新）")
     if prices:
         last = max(prices)

@@ -40,6 +40,7 @@ const F = {
   qd4: { t: "外資持股 4 週變化（百分點）", short: "外資Δ", g: (s) => s.m.qd4, kind: "signed", suf: "", grp: "籌碼" },
   crash_sc: { t: "大跌排序分數（外資持股 30%＋3 年營收成長 30%＋beta 40%）", short: "排序分", g: (s) => s.m.crash_sc, kind: "num0", grp: "分數" },
   crash_beta: { t: "大跌前一年的 beta（相對 0050；> 1 代表漲跌都比大盤大，反彈較強、續跌時也跌較多）", short: "beta", g: (s) => s.m.crash_beta, kind: "num2", grp: "價格" },
+  mg_use: { t: "融資占股本（%，融資餘額 ÷ 股數）；≥ 6% 標紅：2006~2026 回測這類股票之後 12 個月贏 0050 的比例明顯偏低", short: "融資%", g: (s) => s.m.mg_use, kind: "mg", grp: "籌碼" },
   fpe_zf: { t: "前瞻本益比位階 σ（和自己過去 5 年的前瞻本益比比）", short: "前瞻σ", g: (s) => s.m.fpe_zf, kind: "signed", suf: "", grp: "價值" },
   cagr3: { t: "近 3 年營收年複合成長（%）", short: "3年成長", g: (s) => s.m.cagr3, kind: "signed", suf: "%", grp: "營收" },
   cons_chg: { t: "法人共識 EPS 近 90 天變化（FactSet 調查新聞）", short: "法人EPS", g: (s) => s.m.cons_chg, kind: "signed", suf: "%", grp: "營收" },
@@ -91,14 +92,15 @@ function cell(key, s) {
     case "signed1": return signed(v, 1, f.suf === "" ? "" : "%");
     case "num0": return fmt(v, 0, suf);
     case "num1": return fmt(v, 1, suf);
+    case "mg": return v == null ? NA : v >= (state.data.margin?.warn ?? 6) ? `<span class="flag warn">${v.toFixed(1)}</span>` : v.toFixed(1);
     default: return fmt(v, 2, suf);
   }
 }
 
 const TABCOLS = {
-  step2: ["p", "chg", "score", "rev_up_n", "cons_chg", "qf", "cagr3", "pe_z", "cap"],
-  crash: ["p", "chg", "crash_sc", "crash_beta", "qf", "cagr3", "fpe_zf", "rev_up_n", "cons_chg", "cap"],
-  watch: ["p", "chg", "score", "rev_up_n", "rev_rev3", "fpe_zf", "pe_z", "b60", "qd4"],
+  step2: ["p", "chg", "score", "rev_up_n", "cons_chg", "qf", "cagr3", "mg_use", "pe_z", "cap"],
+  crash: ["p", "chg", "crash_sc", "crash_beta", "qf", "cagr3", "mg_use", "fpe_zf", "rev_up_n", "cons_chg", "cap"],
+  watch: ["p", "chg", "score", "rev_up_n", "rev_rev3", "fpe_zf", "pe_z", "b60", "qd4", "mg_use"],
   screen: ["p", "chg", "score", "f", "t", "c", "rev_up_n", "rev_rev3", "rev_hi", "pe_z", "opm", "qf", "cap"],
 };
 const DEFAULT_SORT = { step2: [null, false], crash: [null, false], watch: ["score", false], screen: ["score", false] };
