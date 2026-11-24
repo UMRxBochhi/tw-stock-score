@@ -40,7 +40,7 @@ const F = {
   qd4: { t: "外資持股 4 週變化（百分點）", short: "外資Δ", g: (s) => s.m.qd4, kind: "signed", suf: "", grp: "籌碼" },
   crash_sc: { t: "大跌排序分數（外資持股 30%＋3 年營收成長 30%＋beta 40%）", short: "排序分", g: (s) => s.m.crash_sc, kind: "num0", grp: "分數" },
   crash_beta: { t: "大跌前一年的 beta（相對 0050；> 1 代表漲跌都比大盤大，反彈較強、續跌時也跌較多）", short: "beta", g: (s) => s.m.crash_beta, kind: "num2", grp: "價格" },
-  mg_use: { t: "融資占股本（%，融資餘額 ÷ 股數）；≥ 6% 標紅：2006~2026 回測這類股票之後 12 個月贏 0050 的比例明顯偏低", short: "融資%", g: (s) => s.m.mg_use, kind: "mg", grp: "籌碼" },
+  mg_use: { t: "融資占股本（%，融資餘額 ÷ 股數）；≥ 6% 標紅：2006~2026 回測這類股票之後 12 個月贏 0050 的比例明顯偏低（大跌名單內排除則沒有改善，只當參考）", short: "融資%", g: (s) => s.m.mg_use, kind: "mg", grp: "籌碼" },
   fpe_zf: { t: "前瞻本益比位階 σ（和自己過去 5 年的前瞻本益比比）", short: "前瞻σ", g: (s) => s.m.fpe_zf, kind: "signed", suf: "", grp: "價值" },
   cagr3: { t: "近 3 年營收年複合成長（%）", short: "3年成長", g: (s) => s.m.cagr3, kind: "signed", suf: "%", grp: "營收" },
   cons_chg: { t: "法人共識 EPS 近 90 天變化（FactSet 調查新聞）", short: "法人EPS", g: (s) => s.m.cons_chg, kind: "signed", suf: "%", grp: "營收" },
@@ -256,6 +256,9 @@ function renderMarket() {
   const mp = state.data.mkt_pe;
   if (mp?.pe) cards.push(`<div class="card"><div class="lbl">大盤本益比位階</div><div class="val">${mp.pe} 倍・${mp.z > 0 ? "+" : ""}${mp.z ?? "—"}σ</div>
     <div class="note">近 5 年第 ${mp.pct ?? "—"} 百分位；前瞻 ${mp.fpe ?? "—"} 倍（${mp.fz > 0 ? "+" : ""}${mp.fz ?? "—"}σ）　<a href="#" data-gotab="crash">看走勢 →</a></div></div>`);
+  const mg = state.data.margin;
+  if (mg?.ratio) cards.push(`<div class="card"><div class="lbl">大盤融資維持率（上市）</div><div class="val">${mg.ratio}%・${MG_ZONE[mg.zone] || ""}</div>
+    <div class="note">${md(mg.date)}；近一年最低 ${mg.min1y}%。< 130% 歷史上 12 個月後 0050 全部上漲　<a href="#" data-gotab="crash">看說明 →</a></div></div>`);
   const k = state.data.crash;
   if (k?.active) {
     const h = k.stage?.hits || {};
@@ -295,8 +298,45 @@ function renderStep2Info() {
 }
 
 function renderCrashInfo() {
-  $("#ruleInfo").innerHTML = `<div class="rulebox">${crashHtml()}</div><div class="rulebox">${mktPeHtml()}</div><div class="rulebox">${trioHtml()}</div>`;
+  $("#ruleInfo").innerHTML = `<div class="rulebox">${crashHtml()}</div><div class="rulebox">${marginHtml()}</div><div class="rulebox">${mktPeHtml()}</div><div class="rulebox">${trioHtml()}</div>`;
+  drawMargin();
   drawMktPe();
+}
+
+const MG_ZONE = { lt125: "極低（< 125%）", lt130: "很低（< 130%）", lt140: "偏低（130~140%）", mid: "一般", hot: "融資過熱（≥ 170%）" };
+
+function marginHtml() {
+  const mg = state.data.margin;
+  if (!mg?.ratio) return "";
+  return `<div><b>大盤融資維持率</b>　<span class="note">上市股票融資餘額市值 ÷ 上市融資金額；${md(mg.date)} 為 <b>${mg.ratio}%</b>（${MG_ZONE[mg.zone] || ""}），近一年最低 ${mg.min1y}%</span>
+    <div id="chMargin" class="chartbox"></div>
+    <table class="kv"><tr><td>維持率</td><td>0050 之後 12 個月上漲比例</td><td>中位數</td><td>說明</td></tr>
+      <tr><td>&lt; 130%</td><td>100%（2008~17、2018~ 都是）</td><td>+57%</td><td>很少見：2006~2026 只有 56 天。跌破 130% 共 6 次（2008/09、2011/12、2018/10、2020/03、2022/09、2025/04），12 個月後全部上漲 +15~+122%</td></tr>
+      <tr><td>130~140%</td><td>84%（2008~17 71%、2018~ 100%）</td><td>+20%</td><td>跌破 140% 不可靠：2007/12、2008/06 跌破後 12 個月 −40%、−17%</td></tr>
+      <tr><td>140~170%</td><td>71~84%</td><td>+13~17%</td><td>一般</td></tr>
+      <tr><td>≥ 170%</td><td>72%（2018~ 只有 49%）</td><td>+9%</td><td>融資過熱</td></tr></table>
+    <p class="note"><b>只代表「一年後大概率較高」，不代表已經見底</b>：2008/09 跌破 130% 之後 3 個月 0050 又跌 34%。分子只算股票（其他 ETF 的融資沒算進分子），數字會比新聞報的略低。
+      融資資料晚上才公布，網站通常落後一天。
+      <b>個股融資占股本</b>（表格「融資%」欄）：≥ 10% 的大型股之後 12 個月贏 0050 只有 23%（中位數 −24%），6~10% 30%，&lt; 1% 39%，兩段期間都成立，網站名單內也一樣；≥ 6% 會標紅。
+      但<b>大跌名單裡排除融資高的股票沒有比較好</b>（9 次大跌回測：排除 ≥ 10% 幾乎一樣，排除 ≥ 6% 超額中位數反而少約 1.5 個百分點），所以大跌名單只標示、不排除；平常的選股名單建議避開。</p>
+    <p class="note"><b>分批＋維持率回測</b>（2008~2026 九次大跌、大跌名單 10 檔、0050 回到距高點 5% 內換回）：
+      現行「跌 15%／20%／25% 各 1/3」贏 0050 8/9、超額中位數 +13.3%、最差 −5.0%；
+      「同上，但維持率先跌破 130% 就把剩下的買完」8/9、+11.8%、最差 −1.8%；「第 2、3 批要等維持率 &lt; 130%」8/9、+6.0%、最差 −1.0%；
+      「全部等維持率 &lt; 130% 才買」只有 6/9（2010、2015 等不到）。加維持率條件能讓最差情況好一點，但中位數變少，差異主要來自 2011 一次，<b>所以分批規則不改</b>；
+      維持率跌破 130% 時，可以當作把剩下批次提前買完的參考。</p></div>`;
+}
+
+function drawMargin() {
+  const mg = state.data.margin, el = $("#chMargin");
+  if (!mg?.ser?.length || !el) return;
+  const h = mg.ser, lbl = h.map((x) => md(x[0]));
+  Charts.line(el, {
+    labels: lbl, height: 200,
+    xlabels: h.map((x, i) => i === 0 || x[0].slice(4, 6) !== h[i - 1][0].slice(4, 6) ? `${+x[0].slice(4, 6)}月` : ""),
+    bands: [{ lo: h.map(() => 100), hi: h.map(() => 130), cls: "b1", name: "< 130%" }, { lo: h.map(() => 130), hi: h.map(() => 140), cls: "b2", name: "130~140%" }],
+    series: [{ name: "大盤融資維持率", values: h.map((x) => x[1]), cls: "s-price" }],
+    tip: (i) => `<b>${lbl[i]}</b><br>維持率 ${h[i][1]}%`,
+  });
 }
 
 function mktPeHtml() {
